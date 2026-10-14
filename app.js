@@ -799,6 +799,19 @@ async function demarrerSession(u) {
   let p;
   try { p = await S.db.doc("users/" + u.id).get(); }
   catch (e) { ecran(`<h2>Accès impossible</h2><p style="margin:0">Le profil de ce compte n'a pas pu être lu. Vérifiez que le script schema.sql a été exécuté (guide, étape 3).</p><button id="out">Se déconnecter</button>`); $("#out").onclick = sortir; return; }
+  if (!p.exists) {
+    let init = true; try { const r = await S.sb.rpc("base_initialisee"); init = r.error ? true : !!r.data; } catch {}
+    if (!init) {
+      ecran(`<h2>Finaliser le compte du gérant</h2><p style="margin:0">Votre compte ${esc(u.email)} est créé. Il reste à lui donner les droits de gérant.</p>
+        <form class="form one" id="claimForm"><label>Nom et prénom<input id="c_nom" required autocomplete="name"></label><button class="primary" type="submit">Devenir gérant</button></form>`);
+      $("#claimForm").onsubmit = async (e) => {
+        e.preventDefault(); const r = await S.sb.rpc("premier_admin", { p_nom: $("#c_nom").value.trim() });
+        if (r.error || r.data !== true) { toast(r.error ? msgAuth(r.error) : "Un gérant existe déjà."); return; }
+        S.sessionUid = null; demarrerSession(u);
+      };
+      return;
+    }
+  }
   if (!p.exists || p.data().role === "inactif") {
     ecran(`<h2>Accès non activé</h2><p style="margin:0">Le compte ${esc(u.email)} n'a pas d'accès à la paie. Demandez au gérant de l'activer.</p><button id="out">Se déconnecter</button>`);
     $("#out").onclick = sortir; return;
