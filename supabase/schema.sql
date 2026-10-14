@@ -36,7 +36,7 @@ create table if not exists public.docs (
 );
 create index if not exists docs_societe_idx on public.docs (collection, societe);
 
-create or replace function public.docs_touch() returns trigger language plpgsql as $$
+create or replace function public.docs_touch() returns trigger language plpgsql set search_path = public as $$
 begin new.updated_at := now(); new.updated_by := auth.uid(); return new; end $$;
 drop trigger if exists docs_touch on public.docs;
 create trigger docs_touch before update on public.docs for each row execute function public.docs_touch();
@@ -89,7 +89,9 @@ end $$;
 revoke all on function public.premier_admin(text) from public, anon;
 grant execute on function public.premier_admin(text) to authenticated;
 grant execute on function public.base_initialisee() to anon, authenticated;
+revoke all on function public.doc_update(text, text, jsonb) from public, anon;
 grant execute on function public.doc_update(text, text, jsonb) to authenticated;
+revoke all on function public.is_admin(), public.is_resp(text), public.mois_cloture(text) from public, anon;
 grant execute on function public.is_admin(), public.is_resp(text), public.mois_cloture(text) to authenticated;
 
 -- ---------- Règles d'accès ----------
