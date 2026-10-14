@@ -684,6 +684,7 @@ function renderEquipe(v) {
       const m = e2.message || "";
       const msg = e2.code === "deja" || /already (been )?registered/i.test(m) ? "Cette adresse a déjà un compte. Si la personne avait été désactivée, réactivez-la dans la liste."
         : /signups? not allowed|disabled/i.test(m) ? "Les inscriptions sont désactivées dans Supabase : réactivez « Allow new users to sign up » (guide, étape 2)."
+        : /email rate limit|over_email_send_rate_limit/i.test(m + " " + (e2.code || "")) ? "Supabase essaie d'envoyer un e-mail de confirmation et a atteint sa limite d'envoi. Désactivez « Confirm email » dans Supabase (Authentication > Sign In / Providers > Email), puis réessayez."
         : /rate limit/i.test(m) ? "Trop de créations rapprochées : réessayez dans quelques minutes."
         : /invalid/i.test(m) ? "Adresse e-mail invalide."
         : "Création impossible : " + (m || e2.code);
