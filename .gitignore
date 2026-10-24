@@ -3,3 +3,4 @@ sauvegarde*.json
 *.xlsx
 *.pdf
 .DS_Store
+!formulaires/*.pdf
