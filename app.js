@@ -633,7 +633,7 @@ function lierCafat(v, key, dnt) {
 }
 
 /* ---- Pièces d'identité et justificatifs (stockage privé Supabase, gérant uniquement) ---- */
-const TYPES_PIECES = ["Carte d'identité", "Passeport", "Titre de séjour", "Permis de conduire", "Carte CAFAT", "RIB", "Diplôme", "Autre"];
+const TYPES_PIECES = ["Contrat signé", "Avenant signé", "Carte d'identité", "Passeport", "Titre de séjour", "Permis de conduire", "Carte CAFAT", "RIB", "Diplôme", "Autre"];
 const BUCKET = "pieces";
 function blocPieces(s) {
   const pcs = (s.pieces || []).slice().sort((a, b) => (b.ajoute || "").localeCompare(a.ajoute || ""));
