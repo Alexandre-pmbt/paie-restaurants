@@ -166,6 +166,77 @@ const CONTRATS = (() => {
     return w;
   }
 
-  return { contrat, avenant, controles, limiteHC, fd };
+
+  /* ---------- Fin de contrat ---------- */
+  function enLettres(n) {
+    n = Math.round(Math.abs(Number(n) || 0));
+    if (n === 0) return "zéro";
+    const u = ["", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix", "onze", "douze", "treize", "quatorze", "quinze", "seize"];
+    const d = ["", "dix", "vingt", "trente", "quarante", "cinquante", "soixante", "soixante", "quatre-vingt", "quatre-vingt"];
+    function c99(x) {
+      if (x < 17) return u[x];
+      if (x < 20) return "dix-" + u[x - 10];
+      const dz = Math.floor(x / 10), un = x % 10;
+      if (dz === 7 || dz === 9) return d[dz] + (dz === 7 && un === 1 ? "-et-" : "-") + c99(10 + un);
+      if (un === 0) return d[dz] + (dz === 8 ? "s" : "");
+      return d[dz] + (un === 1 && dz < 8 ? "-et-" : "-") + u[un];
+    }
+    function c999(x, fin) {
+      const c = Math.floor(x / 100), r = x % 100; let t = "";
+      if (c) t = (c > 1 ? u[c] + "-cent" : "cent") + (r === 0 && c > 1 && fin ? "s" : "");
+      if (r) t += (t ? "-" : "") + c99(r);
+      return t;
+    }
+    const parts = []; const mil = Math.floor(n / 1e6), k = Math.floor((n % 1e6) / 1000), rest = n % 1000;
+    if (mil) parts.push(c999(mil, true) + "-million" + (mil > 1 ? "s" : ""));
+    if (k) parts.push(k === 1 ? "mille" : c999(k, false) + "-mille");
+    if (rest) parts.push(c999(rest, true));
+    return parts.join("-");
+  }
+  function identite(s) {
+    const madame = (s.civ || "").toLowerCase().startsWith("mme");
+    return { madame, civ: madame ? "Madame" : "Monsieur", e: madame ? "e" : "", nom: `${s.nom} ${s.prenom}` };
+  }
+  function entete(soc) {
+    return `la société ${soc.nom.replace(/^SARL |^SAS /, "")}, ${soc.forme || "S.A.R.L."} au capital de ${soc.capital || "……"} F.CFP, dont le siège social est situé ${(soc.adresse || "").replace(/\n/g, ", ")}, immatriculée au RIDET sous le numéro ${soc.ridet || "……"}, numéro employeur CAFAT ${soc.cafat || "……"}`;
+  }
+  /* p : { sortie, emplois: "texte libre, une ligne par emploi", dateDoc } */
+  function certificat(soc, s, p) {
+    const g = identite(s);
+    const emplois = String(p.emplois || `${s.emploi || "……"}${s.qualif ? " (" + s.qualif + ")" : ""}`).split("\n").filter(Boolean);
+    return [TITLE("CERTIFICAT DE TRAVAIL"),
+      P(`Je soussigné, ${soc.representant || "Monsieur RODRIGUEZ Alexandre"}, agissant en qualité de ${soc.qualiteRep || "gérant"} de ${entete(soc)},`),
+      P(T("certifie que "), T(`${g.civ} ${g.nom}`, true), T(`, né${g.e} le ${fd(s.naissance)} à ${s.lieuNaissance || "……"}, immatriculé${g.e} à la CAFAT sous le numéro ${s.cafat || "……"},`)),
+      P(T("a été employé" + g.e + " dans notre société "), T(`du ${fd(s.ancienneteDepuis && s.ancienneteDepuis < s.entree ? s.ancienneteDepuis : s.entree)} au ${fd(p.sortie || s.sortie)} inclus`, true), T(", en qualité de :")),
+      ...emplois.map((e) => LI(e)),
+      P(`${g.civ} ${g.nom} quitte l'entreprise libre de tout engagement.`),
+      P("Ce certificat est délivré pour servir et valoir ce que de droit."),
+      P(""), P(`Fait à Nouméa, le ${fd(p.dateDoc)}`),
+      { t: "sig", left: [""], right: ["L'employeur", soc.representant || "Monsieur RODRIGUEZ Alexandre", soc.qualiteRep ? `(${soc.qualiteRep})` : ""] }];
+  }
+  /* p : { sortie, dateDoc, bulletin: { lignes, brut, ts, net, apres, nap } } */
+  function solde(soc, s, p) {
+    const g = identite(s); const b = p.bulletin;
+    const rows = [{ cells: ["Rubrique", "Montant (F CFP)"], b: true }];
+    if (b) {
+      for (const l of b.lignes) if (l.mt) rows.push({ cells: [l.lib + (l.nb != null && /heure|cong/i.test(l.lib) ? ` (${String(l.nb).replace(".", ",")})` : ""), F(l.mt)] });
+      rows.push({ cells: ["Salaire brut", F(b.brut)], b: true });
+      rows.push({ cells: ["Cotisations salariales", F(-b.ts)] });
+      for (const a of b.apres || []) rows.push({ cells: [a.lib, F(a.mt)] });
+      rows.push({ cells: ["NET À PAYER", F(b.nap)], b: true });
+    }
+    const net = b ? b.nap : 0;
+    return [TITLE("REÇU POUR SOLDE DE TOUT COMPTE"),
+      P(T("Je soussigné" + g.e + " "), T(`${g.civ} ${g.nom}`, true), T(`, demeurant ${(s.adresse || "……").replace(/\n/g, ", ")}, immatriculé${g.e} à la CAFAT sous le numéro ${s.cafat || "……"},`)),
+      P(T("reconnais avoir reçu de " + entete(soc) + ", "), T(`la somme nette de ${F(net)} F CFP (${enLettres(net)} francs CFP)`, true),
+        T(`, en paiement des salaires, accessoires du salaire et indemnités de toute nature dus au titre de l'exécution et de la cessation de mon contrat de travail, qui a pris fin le ${fd(p.sortie || s.sortie)}.`)),
+      P("Cette somme se décompose comme suit :"),
+      { t: "tbl", rows },
+      P(`Le présent reçu est établi en double exemplaire, dont un m'a été remis. Il peut être dénoncé dans un délai de deux mois à compter de sa signature, par lettre recommandée motivée adressée à l'employeur. Passé ce délai, il devient libératoire pour l'employeur pour les sommes qui y sont mentionnées.`),
+      P(`Fait à Nouméa, le ${fd(p.dateDoc)}`),
+      { t: "sig", left: [`${g.civ === "Madame" ? "La salariée" : "Le salarié"}`, `${g.civ} ${g.nom}`, "(mention manuscrite « Pour solde de tout compte »)"], right: ["L'employeur", soc.representant || "Monsieur RODRIGUEZ Alexandre"] }];
+  }
+
+  return { contrat, avenant, controles, limiteHC, fd, certificat, solde, enLettres };
 })();
 

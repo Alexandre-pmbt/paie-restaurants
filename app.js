@@ -14,12 +14,12 @@ function defaultMois() { const d = new Date(); d.setDate(1); d.setMonth(d.getMon
 S.mois = store.get("paie.mois") || defaultMois();
 $("#selMois").value = S.mois;
 
-const TABS_ADMIN = [["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
+const TABS_ADMIN = [["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
 const TABS_RESP = [["saisie", "Saisie du mois"]];
 function renderTabs() {
   const tabs = S.admin ? TABS_ADMIN : TABS_RESP;
   $("#tabs").innerHTML = tabs.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}</button>`).join("");
-  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; render(); renderTabs(); };
+  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; render(); renderTabs(); };
 }
 
 const socDoc = () => S.socs.find((x) => x.id === S.soc);
@@ -77,6 +77,7 @@ function render() {
   if (S.tab === "bulletins") return renderBulletins(v);
   if (S.tab === "salaries") return renderSalaries(v);
   if (S.tab === "contrats") return renderContrats(v);
+  if (S.tab === "cafat") return renderCafat(v);
   if (S.tab === "equipe") return renderEquipe(v);
   if (S.tab === "societe") { renderSociete(v); return ajouterOutilsSociete(v); }
 }
@@ -345,6 +346,7 @@ function paramsCt(c) {
 function blocsCt() {
   const s = S.salaries.find((x) => x.id === S.ct.sal); if (!s) return { blocs: [], warn: [] };
   const soc = socDoc(); const p = paramsCt(S.ct);
+  if (S.ct.type === "FIN") return blocsFin(soc, s, p);
   const blocs = S.ct.type === "AVENANT" ? CONTRATS.avenant(soc, s, p) : CONTRATS.contrat(soc, s, p);
   return { blocs, warn: CONTRATS.controles(soc, s, { ...p, type: S.ct.type === "AVENANT" ? "" : S.ct.type, sous: S.ct.type === "AVENANT" ? S.ct.sous : "" }), s, p };
 }
@@ -355,7 +357,9 @@ function renderContrats(v) {
   const sel = (k, l, opts) => `<label>${esc(l)}<select id="ct_${k}" data-ct="${k}">${opts.map(([val, lab]) => `<option value="${esc(val)}" ${String(c[k]) === String(val) ? "selected" : ""}>${esc(lab)}</option>`).join("")}</select></label>`;
   const cats = [1, 2, 3, 4, 5, 6, 7].map((n) => [n, "Catégorie " + ROM[n]]);
   let champs = "";
-  if (c.type !== "AVENANT") {
+  const sCt = S.salaries.find((x) => x.id === c.sal);
+  if (c.type === "FIN") champs = champsFin(c, sCt, fld, sel);
+  else if (c.type !== "AVENANT") {
     champs = fld("emploi", "Emploi") + sel("categorie", "Catégorie", cats) + fld("hebdo", "Durée hebdomadaire (h)", "number", 'step="0.01"') + fld("heuresMois", "Heures par mois", "number", 'step="0.01"') + fld("salaire", "Salaire mensuel brut (F)", "number") + fld("netConvenu", "Net convenu (facultatif)", "number") + fld("debut", "Date de début", "date");
     if (c.type === "CDD") champs += fld("fin", "Date de fin", "date") + sel("motif", "Motif", [["surcroit", "Surcroît temporaire d'activité"], ["remplacement", "Remplacement d'un salarié absent"], ["saisonnier", "Emploi saisonnier"]]) + fld("motifDetail", c.motif === "remplacement" ? "Nom de la personne remplacée" : "Précision du motif (facultatif)");
     else champs += fld("cddDebut", "CDD précédent : début", "date") + fld("cddFin", "CDD précédent : fin", "date") + fld("ancienneteDepuis", "Ancienneté depuis", "date");
@@ -372,30 +376,30 @@ function renderContrats(v) {
   }
   const hist = (S.docs || []).filter((d) => d.salarie === c.sal);
   v.innerHTML = `<div class="split">
-    <div class="panel"><h2>Rédiger un contrat ou un avenant</h2>
+    <div class="panel"><h2>Contrats, avenants et fins de contrat</h2>
       <div class="form">
         <label>Salarié<select id="ct_sal">${S.salaries.map((s) => `<option value="${esc(s.id)}" ${s.id === c.sal ? "selected" : ""}>${esc(s.prenom)} ${esc(s.nom)}</option>`).join("")}</select></label>
-        <label>Document<select id="ct_type">${[["CDI", "Contrat CDI"], ["CDD", "Contrat CDD"], ["AVENANT", "Avenant"]].map(([val, l]) => `<option value="${val}" ${c.type === val ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label>Document<select id="ct_type">${[["CDI", "Contrat CDI"], ["CDD", "Contrat CDD"], ["AVENANT", "Avenant"], ["FIN", "Fin de contrat"]].map(([val, l]) => `<option value="${val}" ${c.type === val ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       </div>
       <p class="small muted" style="margin:0">Pour une embauche, créez d'abord la fiche dans l'onglet Salariés (état civil, adresse, n° CAFAT), puis revenez ici.</p>
       <h3>Clauses</h3>
       <div class="form" id="ctForm">${champs}</div>
       <ul class="alerts" id="ctWarn"></ul>
-      <label class="check small"><input type="checkbox" id="ct_maj" ${c.majFiche ? "checked" : ""}> Mettre à jour la fiche salarié (contrat, horaires, salaire) après l'édition</label>
-      <div class="row"><button class="primary" id="ctWord">Télécharger en Word</button></div>
+      <label class="check small"><input type="checkbox" id="ct_maj" ${c.majFiche ? "checked" : ""}> ${c.type === "FIN" ? "Inscrire la date et le motif de sortie dans la fiche salarié" : "Mettre à jour la fiche salarié (contrat, horaires, salaire) après l'édition"}</label>
+      <div class="row"><button class="primary" id="ctWord">${c.type === "FIN" && c.finDoc === "rupture" ? "Télécharger le formulaire CAFAT (PDF)" : "Télécharger en Word"}</button></div>
       <h3>Documents édités pour ce salarié</h3>
       ${hist.length ? `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Document</th><th></th></tr></thead><tbody>${hist.map((d) => `<tr><td>${esc(frDate(d.le.slice(0, 10)))}</td><td>${esc(d.libelle)}</td><td><button class="link" data-redo="${esc(d.id)}">Rééditer</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="small muted" style="margin:0">Aucun document édité depuis l'application.</p>`}
     </div>
-    <div class="panel"><div class="row"><h2 class="grow">Aperçu</h2><span class="small muted">Le fichier Word reprend ce texte, modifiable avant signature.</span></div><div class="docprev" id="ctPrev"></div></div>
+    <div class="panel"><div class="row"><h2 class="grow">Aperçu</h2><span class="small muted">${c.type === "FIN" && c.finDoc === "rupture" ? "Données reportées sur le formulaire officiel." : "Le fichier Word reprend ce texte, modifiable avant signature."}</span></div><div class="docprev" id="ctPrev"></div></div>
   </div>`;
-  $("#ct_sal").onchange = (e) => { S.ct = initCt(S.salaries.find((x) => x.id === e.target.value)); render(); };
-  $("#ct_type").onchange = (e) => { S.ct.type = e.target.value; if (S.ct.type === "CDD" && !S.ct.essaiJours) S.ct.essaiJours = 0; render(); };
+  $("#ct_sal").onchange = (e) => { const t = S.ct.type, ns = S.salaries.find((x) => x.id === e.target.value); S.ct = initCt(ns); if (t === "FIN") Object.assign(S.ct, initFin(ns), { type: "FIN" }); render(); };
+  $("#ct_type").onchange = (e) => { S.ct.type = e.target.value; if (S.ct.type === "FIN") Object.assign(S.ct, initFin(sCt), { type: "FIN" }); if (S.ct.type === "CDD" && !S.ct.essaiJours) S.ct.essaiJours = 0; render(); };
   document.querySelectorAll("[data-ct]").forEach((el) => {
-    el.addEventListener(el.tagName === "SELECT" ? "change" : "input", () => {
-      const k = el.dataset.ct; S.ct[k] = el.value;
+    el.addEventListener(el.tagName === "SELECT" || el.type === "checkbox" ? "change" : "input", () => {
+      const k = el.dataset.ct; S.ct[k] = el.type === "checkbox" ? el.checked : el.value;
       if (k === "hebdo") { S.ct.heuresMois = hMois(el.value); const smg = socDoc().smg || 1000.08; S.ct.salaire = Math.round(S.ct.heuresMois * smg); const a = $("#ct_heuresMois"), b = $("#ct_salaire"); if (a) a.value = S.ct.heuresMois; if (b) b.value = S.ct.salaire; }
       if (k === "debut" || k === "fin") { if (S.ct.type === "CDD" && S.ct.debut && S.ct.fin) { const sem = Math.ceil(((new Date(S.ct.fin) - new Date(S.ct.debut)) / 86400000 + 1) / 7); S.ct.essaiJours = Math.min(sem, 14); const e2 = $("#ct_essaiJours"); if (e2) e2.value = S.ct.essaiJours; } }
-      if (k === "sous" || k === "motif") return render();
+      if (k === "sous" || k === "motif" || k === "finDoc" || (S.ct.type === "FIN" && k === "sortie")) return render();
       apercuCt();
     });
   });
@@ -405,17 +409,19 @@ function renderContrats(v) {
   apercuCt();
 }
 function apercuCt() {
-  const { blocs, warn } = blocsCt();
-  $("#ctPrev").innerHTML = DOCX.html(blocs, esc);
+  const { blocs, warn, html } = blocsCt();
+  $("#ctPrev").innerHTML = html || DOCX.html(blocs, esc);
   $("#ctWarn").innerHTML = warn.map((w) => `<li>${esc(w)}</li>`).join("");
 }
 function libelleCt(c, s) {
   const L = { renouvellement: "Avenant de renouvellement de CDD", duree: "Avenant durée du travail et salaire", promotion: "Avenant de promotion", remuneration: "Avenant de rémunération", libre: "Avenant" };
+  if (c.type === "FIN") return { certificat: "Certificat de travail", solde: "Reçu pour solde de tout compte", rupture: "Déclaration de rupture CAFAT" }[c.finDoc] + ` (sortie du ${frDate(c.sortie)})`;
   return c.type === "AVENANT" ? `${L[c.sous]} n°${c.numero}` : `${c.type} ${Number(c.hebdo) < 39 ? "temps partiel" : "temps complet"} du ${frDate(c.debut)}`;
 }
 async function editerCt() {
   const { blocs, s, p } = blocsCt(); if (!s) return;
   const c = S.ct; const lib = libelleCt(c, s);
+  if (c.type === "FIN") return editerFin(c, s, lib);
   try {
     const buf = await DOCX.build(blocs);
     const nomF = `${lib.replace(/[^\w\- ]+/g, "").replace(/\s+/g, "_")}_${s.nom}_${s.prenom}.docx`.normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -433,14 +439,207 @@ async function editerCt() {
   } catch (e) { toast("Édition impossible : " + (e.message || e.code)); }
 }
 
+/* ---- Fin de contrat : certificat de travail, solde de tout compte, déclaration de rupture CAFAT ---- */
+const MOTIFS_FIN = [["fin_cdd", "Fin de CDD"], ["demission", "Démission"], ["essai", "Rupture de la période d'essai"], ["licenciement", "Licenciement"], ["rc_employeur", "Rupture conventionnelle (initiative employeur)"], ["rc_salarie", "Rupture conventionnelle (initiative salarié)"], ["autre", "Autre motif"]];
+const DIPLOMES = [["1", "1 - Aucun diplôme"], ["2", "2 - BEPC"], ["3", "3 - CAP ou BEP"], ["4", "4 - Bac"], ["5", "5 - Bac +2"], ["6", "6 - Bac +3 / +4"], ["7", "7 - Bac +5 et plus"]];
+function initFin(s) {
+  if (!s) return {};
+  const emp = `${s.emploi || "Employé(e) polyvalent(e)"}${s.qualif ? " - " + s.qualif : ""}`;
+  return { finDoc: "certificat", sortie: s.sortie || today(), dateDoc: today(), emplois: emp, motifFin: s.motifSortie || (s.contrat === "CDD" ? "fin_cdd" : "demission"),
+    diplome: s.diplome || "1", natureEmploi: Number(s.hebdo || 39) < 39 ? "2" : "1", classification: String(CAFAT.codeClassification(s)), metier: s.emploi || "", nomMarital: s.nomMarital || "",
+    etranger: !!(s.nationalite && !/fran/i.test(s.nationalite)), cessation: false, signataire: "", majFiche: true };
+}
+function champsFin(c, s, fld, sel) {
+  if (c.finDoc == null) Object.assign(c, initFin(s));
+  let h = sel("finDoc", "Document", [["certificat", "Certificat de travail (Word)"], ["solde", "Reçu pour solde de tout compte (Word)"], ["rupture", "Déclaration de rupture à la CAFAT (PDF)"]])
+    + fld("sortie", "Dernier jour du contrat", "date") + fld("dateDoc", "Date du document", "date");
+  if (c.finDoc === "certificat") h += `<label style="grid-column:1/-1">Emplois occupés (un par ligne, avec les périodes si plusieurs)<textarea id="ct_emplois" data-ct="emplois" rows="3">${esc(c.emplois)}</textarea></label>`;
+  if (c.finDoc === "rupture") {
+    h += sel("motifFin", "Motif de la rupture", MOTIFS_FIN) + fld("metier", "Métier exercé") + sel("diplome", "Plus haut diplôme", DIPLOMES)
+      + sel("natureEmploi", "Nature de l'emploi", [["1", "1 - Temps complet"], ["2", "2 - Temps partiel"], ["3", "3 - Intermittent (saisonnier)"]])
+      + sel("classification", "Classification", [["1", "1 - Non précisé"], ["2", "2 - Manœuvre"], ["3", "3 - Ouvrier qualifié"], ["4", "4 - Employé"], ["5", "5 - Technicien"], ["6", "6 - Agent de maîtrise"], ["7", "7 - Ingénieur / Cadre"]])
+      + fld("nomMarital", "Nom marital (facultatif)") + fld("signataire", "Nom et qualité du signataire")
+      + `<label class="check"><input type="checkbox" id="ct_etranger" data-ct="etranger" ${c.etranger ? "checked" : ""}> Nationalité étrangère</label>`
+      + `<label class="check"><input type="checkbox" id="ct_cessation" data-ct="cessation" ${c.cessation ? "checked" : ""}> Cessation d'activité de l'entreprise</label>`;
+  }
+  if (c.finDoc === "solde") h += `<p class="small muted" style="grid-column:1/-1;margin:0">Le détail des sommes est repris du bulletin du mois de sortie (clôturé, sinon calculé). Vérifiez ce bulletin avant de faire signer.</p>`;
+  return h;
+}
+S.cloCache = {};
+function bulletinSortie(s, sortie) {
+  const mois = (sortie || "").slice(0, 7); if (!mois) return { b: null, source: "Indiquez la date de sortie." };
+  if (mois === S.mois) {
+    if (S.cloture && S.cloture.bulletins) { const x = S.cloture.bulletins.find((r) => r.s.id === s.id); return x ? { b: x.b, source: `bulletin clôturé de ${moisLib(mois).toLowerCase()}` } : { b: null, source: `Le salarié n'est pas dans la clôture de ${moisLib(mois).toLowerCase()}.` }; }
+    return { b: calculer({ ...s, sortie }), source: `bulletin de ${moisLib(mois).toLowerCase()} calculé (mois non clôturé)` };
+  }
+  const key = `${S.soc}_${mois}`;
+  if (!(key in S.cloCache)) { S.cloCache[key] = undefined; S.db.doc("clotures/" + key).get().then((d) => { S.cloCache[key] = d.exists ? d.data() : null; if (S.tab === "contrats") render(); }).catch(() => { S.cloCache[key] = null; }); return { b: null, source: "Chargement du bulletin…" }; }
+  const clo = S.cloCache[key];
+  if (clo === undefined) return { b: null, source: "Chargement du bulletin…" };
+  const x = clo && (clo.bulletins || []).find((r) => r.s.id === s.id);
+  return x ? { b: x.b, source: `bulletin clôturé de ${moisLib(mois).toLowerCase()}` } : { b: null, source: `Aucun bulletin pour ${moisLib(mois).toLowerCase()} : sélectionnez ce mois en haut de page pour le calculer, ou clôturez-le.` };
+}
+function donneesRupture(soc, s, c) {
+  return { ridet: soc.ridet, ape: soc.ape, denomination: soc.nom, activite: soc.activite || "Restauration de type rapide", cessation: !!c.cessation,
+    assure: s.cafat, nom: s.nom, nomMarital: c.nomMarital, prenoms: s.prenom, naissance: s.naissance, lieuNaissance: s.lieuNaissance, etranger: !!c.etranger,
+    dateRupture: c.sortie, metier: c.metier || s.emploi, diplome: c.diplome, natureEmploi: c.natureEmploi, classification: c.classification,
+    contrat: s.contrat === "CDD" ? "CDD" : "CDI", motif: c.motifFin, dateDoc: c.dateDoc, signataire: c.signataire || `${(soc.representant || "").replace(/^(Monsieur|Madame)\s+/, "")}, ${soc.qualiteRep || "gérant"}` };
+}
+function blocsFin(soc, s, p) {
+  const c = S.ct; const warn = [];
+  if (!c.sortie) warn.push("Indiquez le dernier jour du contrat.");
+  if (s.entree && c.sortie && c.sortie < s.entree) warn.push("La date de sortie est antérieure à la date d'entrée.");
+  if (c.finDoc === "certificat") return { blocs: CONTRATS.certificat(soc, s, { sortie: c.sortie, emplois: c.emplois, dateDoc: c.dateDoc }), warn, s, p };
+  if (c.finDoc === "solde") {
+    const { b, source } = bulletinSortie(s, c.sortie);
+    if (!b) warn.push(source); else warn.push("Montants repris du " + source + ".");
+    if (b && s.contrat !== "CDD") warn.push("CDI : ajoutez au bulletin de sortie (ajustements du mois) l'indemnité compensatrice de congés payés, et le cas échéant le préavis et l'indemnité de licenciement, avant d'éditer le reçu.");
+    return { blocs: CONTRATS.solde(soc, s, { sortie: c.sortie, dateDoc: c.dateDoc, bulletin: b }), warn, s, p };
+  }
+  const d = donneesRupture(soc, s, c);
+  if (!s.cafat || /cours/i.test(s.cafat)) warn.push("Numéro d'assuré CAFAT manquant dans la fiche salarié.");
+  if (!s.naissance || !s.lieuNaissance) warn.push("Date ou lieu de naissance manquant dans la fiche salarié.");
+  if (!soc.ridet) warn.push("RIDET de la société manquant (onglet Société).");
+  warn.push("À transmettre à la CAFAT dans les 48 heures suivant la rupture (art. R.421-6), en ligne sur l'espace Pro ou avec ce formulaire.");
+  const L = [["RIDET / APE", `${d.ridet || "—"} / ${d.ape || "—"}`], ["Employeur", d.denomination], ["Activité", d.activite], ["N° assuré", d.assure || "—"], ["Salarié", `${d.nom} ${d.prenoms}${d.nomMarital ? " (ép. " + d.nomMarital + ")" : ""}`],
+    ["Né(e) le", `${frDate(d.naissance)} à ${d.lieuNaissance || "—"}`], ["Nationalité", d.etranger ? "Étrangère" : "Française"], ["Date de rupture", frDate(d.dateRupture)], ["Métier", d.metier],
+    ["Diplôme / nature / classification", `${d.diplome} / ${d.natureEmploi} / ${d.classification}`], ["Contrat", d.contrat], ["Motif", (MOTIFS_FIN.find((m) => m[0] === d.motif) || [, ""])[1]], ["Fait le", frDate(d.dateDoc) + " — " + d.signataire]];
+  const html = `<div class="doc-title">DÉCLARATION DE RUPTURE DU CONTRAT DE TRAVAIL</div><table class="doc-tbl">${L.map(([k, v2]) => `<tr><td>${esc(k)}</td><td>${esc(v2)}</td></tr>`).join("")}</table><p class="small muted">Le PDF est le formulaire officiel CAFAT, rempli case par case. Relisez-le, signez-le et apposez le cachet.</p>`;
+  return { blocs: [], html, warn, s, p, d };
+}
+async function chargerModele(nom) {
+  const r = await fetch("formulaires/" + nom); if (!r.ok) throw new Error("formulaire " + nom + " introuvable");
+  return r.arrayBuffer();
+}
+const nomFichier = (x) => x.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w\- .]+/g, "").replace(/\s+/g, "_");
+async function editerFin(c, s, lib) {
+  const soc = socDoc();
+  try {
+    if (c.finDoc === "rupture") {
+      const out = await CAFAT.remplirRupture(await chargerModele("cafat-rupture.pdf"), donneesRupture(soc, s, c));
+      await enregistrerFichier(nomFichier(`Declaration_rupture_CAFAT_${s.nom}_${s.prenom}.pdf`), new Blob([out], { type: "application/pdf" }));
+    } else {
+      const { blocs, warn } = blocsFin(soc, s, {});
+      if (c.finDoc === "solde" && !blocs.find((b) => b.t === "tbl" && b.rows.length > 1)) { toast(warn[0] || "Bulletin de sortie introuvable."); return; }
+      const buf = await DOCX.build(blocs, false);
+      await enregistrerFichier(nomFichier(`${c.finDoc === "solde" ? "Solde_de_tout_compte" : "Certificat_de_travail"}_${s.nom}_${s.prenom}.docx`), buf);
+    }
+    await S.db.collection("documents").add({ societe: S.soc, salarie: s.id, libelle: lib, le: new Date().toISOString(), params: { ...c } });
+    if (c.majFiche && c.sortie && (s.sortie !== c.sortie || (c.finDoc === "rupture" && s.motifSortie !== c.motifFin))) {
+      const m = { sortie: c.sortie }; if (c.finDoc === "rupture") m.motifSortie = c.motifFin;
+      await S.db.doc("salaries/" + s.id).update(m); toast("Document enregistré, date de sortie inscrite dans la fiche.");
+    } else toast("Document enregistré dans l'historique.");
+  } catch (e) { toast("Édition impossible : " + (e.message || e.code)); }
+}
+
+/* ---- Déclarations CAFAT (gérant) ---- */
+S.cf = null; S.cfData = {};
+function renderCafat(v) {
+  const soc = socDoc();
+  if (!S.cf) { const { annee, t } = CAFAT.trimestreDe(S.mois); S.cf = { annee, t, complementaire: false, proratisation: false }; }
+  const { annee, t } = S.cf; const key = `${S.soc}_${annee}-T${t}`;
+  const mois = CAFAT.moisDuTrimestre(annee, t);
+  let dat = S.cfData[key];
+  if (!dat) {
+    S.cfData[key] = { charge: true };
+    Promise.all([...mois.map((m) => S.db.doc(`clotures/${S.soc}_${m}`).get()), S.db.doc(`documents/dnt_${key}`).get()]).then((rs) => {
+      const clotures = {}; rs.slice(0, 3).forEach((d, i) => { if (d.exists) clotures[mois[i]] = d.data().bulletins || []; });
+      const dd = rs[3].exists ? rs[3].data() : {};
+      S.cfData[key] = { clotures, reprises: dd.reprises || {}, enregistre: dd.le || null };
+      if (S.tab === "cafat") render();
+    }).catch((e) => { S.cfData[key] = { erreur: e.message || String(e) }; if (S.tab === "cafat") render(); });
+    dat = S.cfData[key];
+  }
+  const trims = []; for (let y = annee + 1; y >= annee - 2; y--) for (let q = 4; q >= 1; q--) trims.push([y, q]);
+  const tete = `<div class="row"><h2 class="grow">Déclaration nominative trimestrielle (DNT)</h2>
+    <label class="row small">Trimestre <select id="cf_trim">${trims.map(([y, q]) => `<option value="${y}-${q}" ${y === annee && q === t ? "selected" : ""}>${q}${q === 1 ? "er" : "e"} trimestre ${y}</option>`).join("")}</select></label></div>`;
+  const immat = `<div class="panel"><h2>Fiche d'immatriculation employeur</h2>
+    <p class="small" style="margin:0">Pour une société qui embauche son premier salarié et n'a pas encore de numéro employeur CAFAT (par exemple PALLAS). Le formulaire officiel est pré-rempli avec les paramètres de l'onglet Société ; joignez l'extrait Kbis, les statuts et l'avis RIDET.</p>
+    <ul class="alerts">${[!soc.ridet && "RIDET manquant", !soc.activite && "activité principale non renseignée", !soc.commune && "commune du siège non renseignée"].filter(Boolean).map((x) => `<li>${esc(x)} (onglet Société)</li>`).join("")}</ul>
+    <div class="row"><button id="cf_immat">Télécharger la fiche d'immatriculation (PDF)</button>${soc.cafat ? `<span class="small muted">Cette société a déjà le n° employeur ${esc(soc.cafat)}.</span>` : ""}</div></div>`;
+  if (dat.charge || dat.erreur) { v.innerHTML = `<div class="panel">${tete}<p class="muted">${dat.erreur ? "Lecture impossible : " + esc(dat.erreur) : "Chargement des clôtures du trimestre…"}</p></div>${immat}`; lierCafat(v, key); return; }
+  const fiches = S.salaries;
+  const { debut, fin } = CAFAT.bornes(annee, t);
+  const reprises = dat.reprises;
+  const dnt = CAFAT.calculDNT(soc, annee, t, dat.clotures, fiches, reprises);
+  const actifs = fiches.filter((s) => (!s.entree || s.entree <= fin) && (!s.sortie || s.sortie >= debut));
+  const ids = [...new Set([...actifs.map((s) => s.id), ...dnt.lignes.map((l) => l.id)])];
+  const clo = {}; for (const m of mois) for (const { s, b } of dat.clotures[m] || []) { const e = clo[s.id] || (clo[s.id] = { brut: 0, heures: 0, n: 0 }); e.brut += b.brut; e.heures += CAFAT.heuresBulletin(b); e.n++; }
+  const nomDe = (id) => { const s = fiches.find((x) => x.id === id); return s ? `${s.prenom} ${s.nom}` : id; };
+  const lig = (id) => dnt.lignes.find((l) => l.id === id);
+  const fmH = (x) => (Math.round((x || 0) * 100) / 100).toLocaleString("fr-FR");
+  const enCours = new Date().toISOString().slice(0, 10) <= dnt.limite;
+  v.innerHTML = `<div class="panel">${tete}
+    <p class="small" style="margin:0">Période du ${frDate(debut)} au ${frDate(fin)} · à déclarer et payer au plus tard le <b>${frDate(dnt.limite)}</b>${enCours ? "" : ' <span class="chip">échéance passée</span>'} · mois clôturés : ${dnt.moisPresents.map((m) => moisLib(m).toLowerCase()).join(", ") || "aucun"}.</p>
+    <p class="small muted" style="margin:0">${soc.cafat ? "Employeur immatriculé : la DNT se déclare et se paie en ligne sur l'espace Pro de la CAFAT. Reportez-y les montants ci-dessous ; le formulaire papier pré-rempli sert de brouillon ou de secours." : "Pas encore de numéro employeur : faites d'abord l'immatriculation (plus bas), puis utilisez le formulaire papier pré-rempli."}</p>
+    <h3>Salariés</h3>
+    <div class="tbl-wrap"><table><thead><tr><th>Salarié</th><th>N° assuré</th><th class="num">Brut clôturé</th><th class="num">Heures clôturées</th><th class="num">Reprise brut</th><th class="num">Reprise heures</th><th class="num">Brut déclaré</th><th class="num">Heures</th><th>Embauche</th><th>Rupture</th></tr></thead><tbody>
+    ${ids.map((id) => { const l = lig(id); const c = clo[id] || { brut: 0, heures: 0 }; const rp = reprises[id] || {};
+      return `<tr><td>${esc(nomDe(id))}</td><td>${l && l.assure ? esc(l.assure) : '<span class="chip">manquant</span>'}</td><td class="num">${F(c.brut)}</td><td class="num">${fmH(c.heures)}</td>
+      <td class="num"><input class="cf-rp" id="rpb_${esc(id)}" data-id="${esc(id)}" data-f="brut" type="number" value="${esc(rp.brut ?? "")}" aria-label="Reprise brut" style="width:8em"></td>
+      <td class="num"><input class="cf-rp" id="rph_${esc(id)}" data-id="${esc(id)}" data-f="heures" type="number" step="0.01" value="${esc(rp.heures ?? "")}" aria-label="Reprise heures" style="width:6em"></td>
+      <td class="num"><b>${F(l ? l.brut : 0)}</b></td><td class="num">${fmH(l ? l.heures : 0)}</td><td>${esc(frDate(l && l.embauche))}</td><td>${esc(frDate(l && l.rupture))}</td></tr>`; }).join("") || `<tr><td colspan="10" class="muted">Aucun salarié sur ce trimestre.</td></tr>`}
+    <tr><td><b>Total</b></td><td></td><td></td><td></td><td></td><td></td><td class="num"><b>${F(dnt.totalBrut)}</b></td><td></td><td></td><td></td></tr>
+    </tbody></table></div>
+    <div class="row"><span class="small muted grow">« Reprise » : brut et heures des mois du trimestre payés hors de l'application (ancien logiciel), à ajouter aux mois clôturés.${dat.enregistre ? " Dernier enregistrement : " + esc(frDate(dat.enregistre.slice(0, 10))) + "." : ""}</span><button id="cf_saveRp">Enregistrer les reprises</button></div>
+    <h3>Décompte des cotisations</h3>
+    <div class="tbl-wrap"><table><thead><tr><th>Poste</th><th class="num">Assiette</th><th class="num">Taux %</th><th class="num">Montant (F)</th></tr></thead><tbody>
+    ${dnt.postes.filter((x) => x.k !== "ruamm2" || x.assiette).map((x) => `<tr><td>${esc(x.lib)}</td><td class="num">${F(x.assiette)}</td><td class="num">${x.taux == null ? "?" : esc(String(x.taux).replace(".", ","))}</td><td class="num">${x.montant == null ? "—" : F(x.montant)}</td></tr>`).join("")}
+    <tr><td><b>Total à payer</b></td><td></td><td></td><td class="num"><b>${F(dnt.total)}</b></td></tr></tbody></table></div>
+    <ul class="alerts">${dnt.alertes.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>
+    <div class="row">
+      <label class="check small"><input type="checkbox" id="cf_compl" ${S.cf.complementaire ? "checked" : ""}> Déclaration complémentaire</label>
+      <label class="check small"><input type="checkbox" id="cf_prorat" ${S.cf.proratisation ? "checked" : ""}> Reporter les assiettes plafonnées par salarié (proratisation)</label>
+      <span class="grow"></span><button id="cf_xlsx">Récapitulatif Excel</button><button class="primary" id="cf_pdf">Formulaire DNT pré-rempli (PDF)</button></div>
+    <p class="small muted" style="margin:0">Taux appliqués : ceux de l'onglet Société (taux DNT et accident du travail). Les assiettes sont plafonnées au trimestre (3 × plafond mensuel).</p>
+  </div>${immat}`;
+  lierCafat(v, key, dnt);
+}
+function lierCafat(v, key, dnt) {
+  const soc = socDoc();
+  $("#cf_trim").onchange = (e) => { const [y, q] = e.target.value.split("-").map(Number); S.cf.annee = y; S.cf.t = q; render(); };
+  $("#cf_immat").onclick = async () => {
+    try {
+      const adr = (soc.adresse || "").split("\n").map((x) => x.trim()).filter(Boolean);
+      const out = await CAFAT.remplirImmat(await chargerModele("cafat-immatriculation.pdf"), { forme: soc.forme, denomination: soc.nom, sigle: soc.sigle, activite: soc.activite, siege: soc.siege || adr[0] || "", correspondance: soc.correspondance || "", bp: soc.bp, cp: soc.cp, commune: soc.commune, tel: soc.tel, mobile: soc.mobile, email: soc.email, ridet: soc.ridet, rc: soc.rc, ape: soc.ape, localisation: soc.localisation || "", dateDoc: today(), signataire: `${(soc.representant || "").replace(/^(Monsieur|Madame)\s+/, "")}, ${soc.qualiteRep || "gérant"}` });
+      await enregistrerFichier(nomFichier(`Immatriculation_CAFAT_${soc.nom}.pdf`), new Blob([out], { type: "application/pdf" }));
+    } catch (e) { toast("Édition impossible : " + e.message); }
+  };
+  if (!dnt) return;
+  const dat = S.cfData[key];
+  v.querySelectorAll(".cf-rp").forEach((i) => (i.onchange = () => { const r = dat.reprises[i.dataset.id] || (dat.reprises[i.dataset.id] = {}); r[i.dataset.f] = i.value === "" ? null : Number(i.value); render(); }));
+  $("#cf_saveRp").onclick = async () => {
+    const rp = {}; for (const [id, r] of Object.entries(dat.reprises)) if (Number(r.brut) || Number(r.heures)) rp[id] = { brut: Number(r.brut) || 0, heures: Number(r.heures) || 0 };
+    try { const le = new Date().toISOString(); await S.db.doc(`documents/dnt_${key}`).set({ societe: S.soc, type: "dnt", trimestre: key.split("_").pop(), reprises: rp, le }); dat.enregistre = le; toast("Reprises enregistrées."); render(); }
+    catch (e) { toast("Enregistrement refusé : " + (e.message || e.code)); }
+  };
+  $("#cf_compl").onchange = (e) => (S.cf.complementaire = e.target.checked);
+  $("#cf_prorat").onchange = (e) => (S.cf.proratisation = e.target.checked);
+  $("#cf_pdf").onclick = async () => {
+    try {
+      const out = await CAFAT.remplirDNT(await chargerModele("cafat-dnt.pdf"), { ...dnt, compte: soc.cafat, ridet: soc.ridet, denomination: soc.nom, communeCode: soc.communeCode || "", et: soc.etablissement || String(soc.ridet || "").replace(/\D/g, "").slice(7, 10), codeCotisation: soc.codeCotisation || "", secteur: soc.secteur || "", dateDoc: today(), complementaire: S.cf.complementaire, proratisation: S.cf.proratisation });
+      await enregistrerFichier(nomFichier(`DNT_${soc.nom}_${dnt.annee}-T${dnt.t}.pdf`), new Blob([out], { type: "application/pdf" }));
+    } catch (e) { toast("Édition impossible : " + e.message); }
+  };
+  $("#cf_xlsx").onclick = () => {
+    const rows = dnt.lignes.map((l) => ({ "N° assuré": l.assure, Nom: l.nom, Prénoms: l.prenoms, Heures: l.heures, "Rémunération brute": l.brut, "Assiette RUAMM T1": l.ruamm1, "Assiette RUAMM T2": l.ruamm2, "Assiette retraite": l.retraite, "Assiette autres régimes": l.autres, "Assiette FSH": l.fsh, Embauche: frDate(l.embauche), Rupture: frDate(l.rupture) }));
+    const dec = dnt.postes.map((x) => ({ Poste: x.lib, Assiette: x.assiette, "Taux %": x.taux, Montant: x.montant }));
+    dec.push({ Poste: "TOTAL", Montant: dnt.total }, {}, { Poste: "Date limite", Assiette: frDate(dnt.limite) });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Salariés");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dec), "Décompte");
+    enregistrerFichier(nomFichier(`DNT_${soc.nom}_${dnt.annee}-T${dnt.t}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+  };
+}
+
 /* ---- Salariés (gérant) ---- */
 const CHAMPS = [
   ["civ", "Civilité", "text"], ["prenom", "Prénom", "text"], ["nom", "Nom", "text"], ["planningNoms", "Noms au planning (séparés par des virgules)", "list"],
-  ["matricule", "Matricule", "text"], ["cafat", "N° CAFAT", "text"], ["contrat", "Contrat", "sel:CDI,CDD"], ["entree", "Date d'entrée", "date"], ["ancienneteDepuis", "Ancienneté depuis", "date"], ["sortie", "Date de sortie", "date"],
+  ["matricule", "Matricule", "text"], ["cafat", "N° CAFAT", "text"], ["contrat", "Contrat", "sel:CDI,CDD"], ["entree", "Date d'entrée", "date"], ["ancienneteDepuis", "Ancienneté depuis", "date"], ["sortie", "Date de sortie", "date"], ["motifSortie", "Motif de sortie", "sel:=—,fin_cdd=Fin de CDD,demission=Démission,essai=Rupture de la période d'essai,licenciement=Licenciement,rc_employeur=Rupture conventionnelle (employeur),rc_salarie=Rupture conventionnelle (salarié),autre=Autre"],
   ["qualif", "Qualification", "text"], ["emploi", "Emploi", "text"], ["base", "Salaire de base brut (F)", "num"], ["heuresMois", "Heures par mois", "num"], ["hebdo", "Durée hebdo du contrat (h)", "num"],
   ["anc", "Prime d'ancienneté (%)", "num"], ["mutuelle", "Mutuelle", "sel:0=Aucune,1=Salarié,2=Salarié + ayants droit"], ["repasOfferts", "Repas offerts (pas de part salarié)", "bool"],
   ["cpSolde", "Solde de congés (jours)", "num"], ["cpN1", "dont année précédente (jours)", "num"], ["cumBrut", "Cumul brut de l'année (F)", "num"], ["cumNet", "Cumul net imposable (F)", "num"], ["brutAnterieur", "Brut déjà versé sur le contrat (CDD)", "num"],
-  ["adresse", "Adresse", "text"], ["naissance", "Date de naissance", "date"], ["lieuNaissance", "Lieu de naissance", "text"], ["nationalite", "Nationalité", "text"], ["notes", "Notes internes", "text"],
+  ["nomMarital", "Nom marital", "text"], ["diplome", "Plus haut diplôme (CAFAT)", "sel:=—,1=Aucun diplôme,2=BEPC,3=CAP ou BEP,4=Bac,5=Bac +2,6=Bac +3 / +4,7=Bac +5 et plus"], ["adresse", "Adresse", "text"], ["naissance", "Date de naissance", "date"], ["lieuNaissance", "Lieu de naissance", "text"], ["nationalite", "Nationalité", "text"], ["notes", "Notes internes", "text"],
 ];
 function renderSalaries(v) {
   const sel = S.salaries.find((s) => s.id === S.sel) || null;
@@ -484,6 +683,7 @@ function champ(k, l, t, val) {
 /* ---- Société (gérant) ---- */
 function renderSociete(v) {
   const soc = socDoc() || { id: "", nom: "", cotisations: [] };
+  const dntP = { ...CAFAT.DEFAUT, ...(soc.dnt || {}) };
   v.innerHTML = `<div class="panel"><h2>Paramètres de ${esc(soc.nom || "la société")}</h2>
   <form id="socForm" class="form">
     <label>Raison sociale<input name="nom" id="s_nom" value="${esc(soc.nom)}"></label>
@@ -505,6 +705,24 @@ function renderSociete(v) {
     <label>Mutuelle : part salarié (F)<input name="mutSal" id="s_ms" type="number" value="${soc.mutSal ?? 1425}"></label>
     <label>Mutuelle : part patronale (F)<input name="mutPat" id="s_mp" type="number" value="${soc.mutPat ?? 1425}"></label>
     <label>Mutuelle : ayants droit (F)<input name="mutAyd" id="s_ma" type="number" value="${soc.mutAyd ?? 2850}"></label>
+    <h3 style="grid-column:1/-1;margin-bottom:0">Déclarations CAFAT</h3>
+    <label>Sigle / enseigne<input name="sigle" id="s_sigle" value="${esc(soc.sigle || "")}"></label>
+    <label>Activité principale<input name="activite" id="s_act" value="${esc(soc.activite || "Restauration de type rapide")}"></label>
+    <label>Code postal<input name="cp" id="s_cp" value="${esc(soc.cp || "")}"></label>
+    <label>Commune du siège<input name="commune" id="s_com" value="${esc(soc.commune || "")}"></label>
+    <label>Boîte postale<input name="bp" id="s_bp" value="${esc(soc.bp || "")}"></label>
+    <label>Téléphone fixe<input name="tel" id="s_tel" value="${esc(soc.tel || "")}"></label>
+    <label>Mobile<input name="mobile" id="s_mob" value="${esc(soc.mobile || "")}"></label>
+    <label>E-mail<input name="email" id="s_mail" value="${esc(soc.email || "")}"></label>
+    <label>N° RCS<input name="rc" id="s_rc" value="${esc(soc.rc || "")}"></label>
+    <label>Code commune de travail (DNT)<input name="communeCode" id="s_cc" value="${esc(soc.communeCode || "")}" placeholder="ex. 18 = Nouméa"></label>
+    <label>N° d'établissement (DNT)<input name="etablissement" id="s_et" value="${esc(soc.etablissement || "")}" placeholder="3 derniers chiffres du RIDET"></label>
+    <label>Code cotisation (DNT)<input name="codeCotisation" id="s_ccot" value="${esc(soc.codeCotisation || "")}"></label>
+    <label>Secteur (DNT)<input name="secteur" id="s_sect" value="${esc(soc.secteur || "")}"></label>
+    <label>Taux RUAMM T1 + FIAF (%)<input name="tauxRuamm1" id="s_tr1" type="number" step="0.001" value="${dntP.tauxRuamm1 ?? ""}"></label>
+    <label>Taux retraite (%)<input name="tauxRetraite" id="s_tret" type="number" step="0.001" value="${dntP.tauxRetraite ?? ""}"></label>
+    <label>Taux autres régimes (%)<input name="tauxAutres" id="s_taut" type="number" step="0.001" value="${dntP.tauxAutres ?? ""}"></label>
+    <label>Taux RUAMM T2 (%)<input name="tauxRuamm2" id="s_tr2" type="number" step="0.001" value="${dntP.tauxRuamm2 ?? ""}" placeholder="si un salarié dépasse le plafond"></label>
     <label style="grid-column:1/-1">Jours fériés (AAAA-MM-JJ, séparés par des virgules)<input name="feries" id="s_fer" value="${esc((soc.feries || []).join(", "))}"></label>
   </form>
   <h3>Cotisations</h3>
@@ -516,7 +734,8 @@ function renderSociete(v) {
   $("#addCot").onclick = () => { soc.cotisations = [...(soc.cotisations || []), { lib: "Nouvelle cotisation", sal: 0, pat: 0, plafond: null }]; renderSociete(v); };
   $("#saveSoc").onclick = async () => {
     const f = $("#socForm"); const d = {};
-    ["nom", "adresse", "ridet", "ape", "cafat", "convention", "forme", "capital", "representant", "qualiteRep", "humanis", "cameras"].forEach((k) => (d[k] = f.elements[k].value));
+    ["nom", "adresse", "ridet", "ape", "cafat", "convention", "forme", "capital", "representant", "qualiteRep", "humanis", "cameras", "sigle", "activite", "cp", "commune", "bp", "tel", "mobile", "email", "rc", "communeCode", "etablissement", "codeCotisation", "secteur"].forEach((k) => (d[k] = f.elements[k].value));
+    d.dnt = { ...(soc.dnt || {}) }; ["tauxRuamm1", "tauxRetraite", "tauxAutres", "tauxRuamm2"].forEach((k) => (d.dnt[k] = f.elements[k].value === "" ? null : Number(f.elements[k].value)));
     ["smg", "assiduite", "repasPct", "ccs", "mutSal", "mutPat", "mutAyd"].forEach((k) => (d[k] = Number(f.elements[k].value)));
     d.feries = f.elements.feries.value.split(",").map((x) => x.trim()).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x));
     const cots = (soc.cotisations || []).map((c) => ({ ...c }));
