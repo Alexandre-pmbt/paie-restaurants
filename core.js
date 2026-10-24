@@ -163,7 +163,7 @@ const PAIE = (() => {
     if (anc) add("Prime d'ancienneté", baseAnc, null, n2(anc) + "00", r(baseAnc * anc / 100));
     const ans = ansRevolus(entree === "1900-01-01" ? debM : (s.ancienneteDepuis || entree), finM);
     if (ans >= 2 && !anc) notes.push(`${ans} ans d'ancienneté : prime d'ancienneté à mettre sur la fiche salarié.`);
-    const assidAuto = !reel && !ne && !mal && !jours.some((j) => j.malJour);
+    const assidAuto = !s.sansAssiduite && !reel && !ne && !mal && !jours.some((j) => j.malJour);
     const assid = v.assiduite === true || v.assiduite === false ? v.assiduite : assidAuto;
     if (assid && soc.assiduite) add("Prime d'assiduité", soc.assiduite, 1, null, soc.assiduite);
     const pex = Number(v.primeExc) || 0;
