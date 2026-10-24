@@ -43,7 +43,7 @@ function err(e) { console.warn(e); toast("Lecture impossible : " + (e && e.messa
 /* ---------- Calcul ---------- */
 function actifsDuMois() {
   const deb = S.mois + "-01";
-  return S.salaries.filter((s) => (!s.sortie || s.sortie >= deb) && (!s.entree || s.entree <= finMois()));
+  return S.salaries.filter((s) => s.statut !== "futur" && (!s.sortie || s.sortie >= deb) && (!s.entree || s.entree <= finMois()));
 }
 function finMois() { const [y, m] = S.mois.split("-").map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); }
 function varsPour(s) {
@@ -429,7 +429,7 @@ async function editerCt() {
     await S.db.collection("documents").add({ societe: S.soc, salarie: s.id, libelle: lib, le: new Date().toISOString(), params: { ...c } });
     if (c.majFiche) {
       const m = {};
-      if (c.type !== "AVENANT") Object.assign(m, { contrat: c.type, entree: c.cddDebut || c.debut, sortie: c.type === "CDD" ? c.fin || null : null, hebdo: p.hebdo, heuresMois: p.heuresMois, base: p.salaire, emploi: c.emploi, qualif: "Catégorie " + ROM[p.categorie], ancienneteDepuis: c.type === "CDI" ? (c.ancienneteDepuis || null) : (s.ancienneteDepuis || null) });
+      if (c.type !== "AVENANT") Object.assign(m, { statut: "actif", contrat: c.type, entree: c.cddDebut || c.debut, sortie: c.type === "CDD" ? c.fin || null : null, hebdo: p.hebdo, heuresMois: p.heuresMois, base: p.salaire, emploi: c.emploi, qualif: "Catégorie " + ROM[p.categorie], ancienneteDepuis: c.type === "CDI" ? (c.ancienneteDepuis || null) : (s.ancienneteDepuis || null) });
       else if (c.sous === "renouvellement") m.sortie = c.nouveauTerme || s.sortie;
       else if (c.sous === "duree") Object.assign(m, { hebdo: p.hebdo, heuresMois: p.heuresMois, base: p.salaire });
       else if (c.sous === "promotion") Object.assign(m, { emploi: c.emploi, qualif: "Catégorie " + ROM[p.categorie], heuresMois: p.heuresMois, base: p.salaire });
@@ -562,7 +562,7 @@ function renderCafat(v) {
   const { debut, fin } = CAFAT.bornes(annee, t);
   const reprises = dat.reprises;
   const dnt = CAFAT.calculDNT(soc, annee, t, dat.clotures, fiches, reprises);
-  const actifs = fiches.filter((s) => (!s.entree || s.entree <= fin) && (!s.sortie || s.sortie >= debut));
+  const actifs = fiches.filter((s) => s.statut !== "futur" && (!s.entree || s.entree <= fin) && (!s.sortie || s.sortie >= debut));
   const ids = [...new Set([...actifs.map((s) => s.id), ...dnt.lignes.map((l) => l.id)])];
   const clo = {}; for (const m of mois) for (const { s, b } of dat.clotures[m] || []) { const e = clo[s.id] || (clo[s.id] = { brut: 0, heures: 0, n: 0 }); e.brut += b.brut; e.heures += CAFAT.heuresBulletin(b); e.n++; }
   const nomDe = (id) => { const s = fiches.find((x) => x.id === id); return s ? `${s.prenom} ${s.nom}` : id; };
@@ -632,9 +632,72 @@ function lierCafat(v, key, dnt) {
   };
 }
 
+/* ---- Pièces d'identité et justificatifs (stockage privé Supabase, gérant uniquement) ---- */
+const TYPES_PIECES = ["Carte d'identité", "Passeport", "Titre de séjour", "Permis de conduire", "Carte CAFAT", "RIB", "Diplôme", "Autre"];
+const BUCKET = "pieces";
+function blocPieces(s) {
+  const pcs = (s.pieces || []).slice().sort((a, b) => (b.ajoute || "").localeCompare(a.ajoute || ""));
+  const auj = today();
+  return `<h3>Pièces d'identité et justificatifs</h3>
+  <div class="tbl-wrap"><table><thead><tr><th>Type</th><th>Fichier</th><th>Expire le</th><th>Ajouté le</th><th></th></tr></thead><tbody>
+  ${pcs.map((p) => `<tr><td>${esc(p.type)}</td><td class="small">${esc(p.nom)}</td><td>${p.expire ? esc(frDate(p.expire)) + (p.expire < auj ? ' <span class="chip">expirée</span>' : "") : ""}</td><td>${esc(frDate((p.ajoute || "").slice(0, 10)))}</td>
+    <td class="row" style="gap:6px;flex-wrap:nowrap"><button class="link" data-voir="${esc(p.chemin)}">Ouvrir</button><button class="link" data-suppr="${esc(p.chemin)}">Supprimer</button></td></tr>`).join("") || `<tr><td colspan="5" class="muted">Aucune pièce jointe.</td></tr>`}
+  </tbody></table></div>
+  <div class="form" id="pcForm">
+    <label>Type de pièce<select id="pc_type">${TYPES_PIECES.map((t) => `<option>${esc(t)}</option>`).join("")}</select></label>
+    <label>Date d'expiration (facultatif)<input id="pc_exp" type="date"></label>
+    <label style="grid-column:1/-1">Fichier (photo ou PDF, 10 Mo maximum ; recto et verso possibles)<input id="pc_fic" type="file" accept="image/*,application/pdf" multiple></label>
+  </div>
+  <div class="row"><button id="pc_add">Joindre</button><span class="small muted grow">Fichiers stockés dans un espace privé, visibles par le gérant seulement (pas par les responsables).</span></div>`;
+}
+const MIME_OK = /^(image\/(jpeg|png|heic|heif|webp)|application\/pdf)$/;
+function lierPieces(s) {
+  const add = $("#pc_add"); if (!add) return;
+  add.onclick = async () => {
+    const files = [...$("#pc_fic").files]; if (!files.length) { toast("Choisissez un fichier."); return; }
+    const type = $("#pc_type").value, expire = $("#pc_exp").value || null;
+    const ajouts = [];
+    add.disabled = true; add.textContent = "Envoi…";
+    try {
+      for (const f of files) {
+        const mime = f.type || (/\.pdf$/i.test(f.name) ? "application/pdf" : /\.hei[cf]$/i.test(f.name) ? "image/heic" : "");
+        if (!MIME_OK.test(mime)) throw new Error(`${f.name} : format non accepté (photo JPEG/PNG/HEIC ou PDF)`);
+        if (f.size > 10 * 1024 * 1024) throw new Error(`${f.name} : fichier trop lourd (10 Mo maximum)`);
+        const propre = f.name.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w.\-]+/g, "_").slice(-80);
+        const chemin = `${S.soc}/${s.id}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${propre}`;
+        const { error } = await S.sb.storage.from(BUCKET).upload(chemin, f, { contentType: mime, upsert: false });
+        if (error) throw error;
+        ajouts.push({ chemin, nom: f.name, type, expire, taille: f.size, mime, ajoute: new Date().toISOString() });
+      }
+    } catch (e) { toast("Envoi impossible : " + (e.message || e.error || e)); }
+    if (ajouts.length) {
+      try { await S.db.doc("salaries/" + s.id).update({ pieces: [...(s.pieces || []), ...ajouts] }); toast(ajouts.length > 1 ? `${ajouts.length} pièces jointes.` : "Pièce jointe."); }
+      catch (e) { toast("Fiche non mise à jour : " + (e.message || e.code)); }
+    }
+    add.disabled = false; add.textContent = "Joindre";
+  };
+  document.querySelectorAll("[data-voir]").forEach((b) => (b.onclick = async () => {
+    const w = window.open("", "_blank");
+    try {
+      const { data, error } = await S.sb.storage.from(BUCKET).createSignedUrl(b.dataset.voir, 120);
+      if (error) throw error;
+      if (w) w.location = data.signedUrl; else location.assign(data.signedUrl);
+    } catch (e) { if (w) w.close(); toast("Ouverture impossible : " + (e.message || e)); }
+  }));
+  document.querySelectorAll("[data-suppr]").forEach((b) => (b.onclick = async () => {
+    const p = (s.pieces || []).find((x) => x.chemin === b.dataset.suppr); if (!p) return;
+    if (b.dataset.ok !== "1") { b.dataset.ok = "1"; b.textContent = "Confirmer ?"; setTimeout(() => { b.dataset.ok = ""; b.textContent = "Supprimer"; }, 4000); return; }
+    try {
+      const { error } = await S.sb.storage.from(BUCKET).remove([p.chemin]); if (error) throw error;
+      await S.db.doc("salaries/" + s.id).update({ pieces: (s.pieces || []).filter((x) => x.chemin !== p.chemin) });
+      toast("Pièce supprimée.");
+    } catch (e) { toast("Suppression impossible : " + (e.message || e)); }
+  }));
+}
+
 /* ---- Salariés (gérant) ---- */
 const CHAMPS = [
-  ["civ", "Civilité", "text"], ["prenom", "Prénom", "text"], ["nom", "Nom", "text"], ["planningNoms", "Noms au planning (séparés par des virgules)", "list"],
+  ["statut", "Statut", "sel:actif=Salarié (en poste ou sorti),futur=Futur salarié (pas encore embauché)"], ["civ", "Civilité", "text"], ["prenom", "Prénom", "text"], ["nom", "Nom", "text"], ["planningNoms", "Noms au planning (séparés par des virgules)", "list"],
   ["matricule", "Matricule", "text"], ["cafat", "N° CAFAT", "text"], ["contrat", "Contrat", "sel:CDI,CDD"], ["entree", "Date d'entrée", "date"], ["ancienneteDepuis", "Ancienneté depuis", "date"], ["sortie", "Date de sortie", "date"], ["motifSortie", "Motif de sortie", "sel:=—,fin_cdd=Fin de CDD,demission=Démission,essai=Rupture de la période d'essai,licenciement=Licenciement,rc_employeur=Rupture conventionnelle (employeur),rc_salarie=Rupture conventionnelle (salarié),autre=Autre"],
   ["qualif", "Qualification", "text"], ["emploi", "Emploi", "text"], ["base", "Salaire de base brut (F)", "num"], ["heuresMois", "Heures par mois", "num"], ["hebdo", "Durée hebdo du contrat (h)", "num"],
   ["anc", "Prime d'ancienneté (%)", "num"], ["mutuelle", "Mutuelle", "sel:0=Aucune,1=Salarié,2=Salarié + ayants droit"], ["repasOfferts", "Repas offerts (pas de part salarié)", "bool"],
@@ -643,18 +706,20 @@ const CHAMPS = [
 ];
 function renderSalaries(v) {
   const sel = S.salaries.find((s) => s.id === S.sel) || null;
-  const editing = S.editNew ? { societe: S.soc, contrat: "CDI", heuresMois: 169, hebdo: 39, mutuelle: 0, anc: 0, cpSolde: 0, cpN1: 0 } : sel;
+  const editing = S.editNew ? { societe: S.soc, statut: "futur", contrat: "CDI", heuresMois: 169, hebdo: 39, mutuelle: 0, anc: 0, cpSolde: 0, cpN1: 0 } : sel;
   v.innerHTML = `<div class="split">
     <div class="panel"><div class="row"><h2 class="grow">Salariés de ${esc(socDoc().nom)}</h2><button id="addSal">Ajouter un salarié</button></div>
       <div class="tbl-wrap"><table><thead><tr><th>Salarié</th><th>Contrat</th><th class="num">Base</th><th class="num">CP</th></tr></thead><tbody>
-      ${S.salaries.map((s) => `<tr class="click ${s.id === S.sel && !S.editNew ? "sel" : ""}" data-id="${esc(s.id)}"><td>${esc(s.prenom)} ${esc(s.nom)} ${s.sortie && s.sortie < S.mois + "-01" ? `<span class="chip">Sorti</span>` : ""}</td><td>${esc(s.contrat || "")} ${s.hebdo ? esc(String(s.hebdo).replace(".", ",")) + " h" : ""}</td><td class="num">${F(Number(s.base) || 0)}</td><td class="num">${String(s.cpSolde ?? 0).replace(".", ",")}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Aucun salarié.</td></tr>`}
+      ${S.salaries.map((s) => `<tr class="click ${s.id === S.sel && !S.editNew ? "sel" : ""}" data-id="${esc(s.id)}"><td>${esc(s.prenom)} ${esc(s.nom)} ${s.statut === "futur" ? `<span class="chip">À embaucher</span>` : s.sortie && s.sortie < S.mois + "-01" ? `<span class="chip">Sorti</span>` : ""}${(s.pieces || []).length ? ` <span class="small muted" title="Pièces jointes">📎${s.pieces.length}</span>` : ""}</td><td>${esc(s.contrat || "")} ${s.hebdo ? esc(String(s.hebdo).replace(".", ",")) + " h" : ""}</td><td class="num">${F(Number(s.base) || 0)}</td><td class="num">${String(s.cpSolde ?? 0).replace(".", ",")}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Aucun salarié.</td></tr>`}
       </tbody></table></div></div>
     <div class="panel">${editing ? `<h2>${S.editNew ? "Nouveau salarié" : esc(editing.prenom + " " + editing.nom)}</h2>
       <form class="form" id="salForm">${CHAMPS.map(([k, l, t]) => champ(k, l, t, editing[k])).join("")}
-      <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">Enregistrer la fiche</button>${S.editNew ? `<button type="button" id="cancelNew">Annuler</button>` : ""}</div></form>` : `<div class="empty">Sélectionnez un salarié pour voir ou modifier sa fiche.</div>`}</div></div>`;
+      <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">Enregistrer la fiche</button>${S.editNew ? `<button type="button" id="cancelNew">Annuler</button>` : ""}</div></form>
+      ${S.editNew ? `<p class="small muted" style="margin:0">Enregistrez la fiche pour pouvoir y joindre les pièces d'identité.</p>` : blocPieces(editing)}` : `<div class="empty">Sélectionnez un salarié pour voir ou modifier sa fiche.</div>`}</div></div>`;
   document.querySelectorAll("tr[data-id]").forEach((tr) => (tr.onclick = () => { S.sel = tr.dataset.id; S.editNew = false; render(); }));
   $("#addSal").onclick = () => { S.editNew = true; render(); };
   if ($("#cancelNew")) $("#cancelNew").onclick = () => { S.editNew = false; render(); };
+  if (sel && !S.editNew) lierPieces(sel);
   const f = $("#salForm");
   if (f) f.onsubmit = async (e) => {
     e.preventDefault(); const d = { societe: S.soc };
