@@ -137,10 +137,20 @@ function renderVue() {
 
 /* ---- Saisie du mois (gérant + responsables) ---- */
 function renderSaisie(v) {
+  const s0 = (k) => { const x = S.salaries.find((y) => (y.planningNoms && y.planningNoms.length ? y.planningNoms : [y.prenom]).map(PAIE.normNom)[0] === k); return x && x.sansPlanning ? "hors planning" : "absent du planning"; };
   const sa = S.parsed || S.saisie;
   const plan = sa && sa.planning ? sa.planning : null;
   const vars = (S.parsed ? S.parsed.variables : sa && sa.variables) || {};
-  const noms = plan ? Object.keys(plan) : Object.keys(vars);
+  const noms = (plan ? Object.keys(plan) : Object.keys(vars)).filter((k) => !/^TOTAL/i.test(k));
+  // Salariés du mois absents du planning (ex. manager hors planning) : lignes pour saisir repas et acomptes
+  const hors = {};
+  if (S.admin) {
+    const presents = new Set(noms.map(PAIE.normNom));
+    for (const s of actifsDuMois()) {
+      const ns = (s.planningNoms && s.planningNoms.length ? s.planningNoms : [s.prenom]).map(PAIE.normNom);
+      if (!ns.some((n) => presents.has(n))) { hors[ns[0]] = `${s.prenom} ${s.nom}`; noms.push(ns[0]); presents.add(ns[0]); }
+    }
+  }
   const clos = S.cloture || (S.saisie && S.saisie.cloture);
   v.innerHTML = `
   <div class="panel">
@@ -160,7 +170,7 @@ function renderSaisie(v) {
         const t = (f) => j.reduce((a, x) => a + (x[f] || 0), 0);
         const cp = j.filter((x) => x.cp && new Date(x.d + "T00:00:00Z").getUTCDay() !== 0).length;
         const vv = vars[k] || {};
-        return `<tr><td>${esc(p ? p.libelle : k)}</td><td class="num">${p ? hh(t("h")) : "—"}</td><td class="num">${t("ne") ? hh(t("ne")) : ""}</td><td class="num">${t("mal") ? hh(t("mal")) : ""}</td><td class="num">${cp || ""}</td>
+        return `<tr><td>${esc(p ? p.libelle : hors[k] || k)}${hors[k] ? ` <span class="chip">${s0(k)}</span>` : ""}</td><td class="num">${p ? hh(t("h")) : "—"}</td><td class="num">${t("ne") ? hh(t("ne")) : ""}</td><td class="num">${t("mal") ? hh(t("mal")) : ""}</td><td class="num">${cp || ""}</td>
         <td><input type="number" min="0" step="1" id="rep_${k}" data-k="${k}" data-f="repas" value="${vv.repas ?? ""}" ${clos ? "disabled" : ""} aria-label="Repas ${esc(k)}"></td>
         <td><input type="number" min="0" step="1000" id="acp_${k}" data-k="${k}" data-f="acompte" value="${vv.acompte ?? ""}" ${clos ? "disabled" : ""} aria-label="Acompte ${esc(k)}"></td></tr>`;
       }).join("")}</tbody></table></div>
