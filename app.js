@@ -77,8 +77,13 @@ function alertesContrats() {
   const nomSoc = (id) => (S.socs.find((x) => x.id === id) || {}).nom || id;
   const out = [];
   for (const s of S.tous || []) {
-    if (s.statut === "futur" || s.statut === "archive") continue;
+    if (s.statut === "futur") continue;
     const qui = `${s.prenom || ""} ${s.nom || ""}`.trim(), soc = nomSoc(s.societe);
+    if (s.sortie && s.sortie <= auj && s.sortie >= "2026-09-01" && !s.sortieCafat) {
+      const soc2 = S.socs.find((x) => x.id === s.societe) || {};
+      out.push({ niv: "bad", s, j: jours(s.sortie) - 100, cafat: true, txt: `${qui} (${soc}) : sortie du ${frDate(s.sortie)} à déclarer à la CAFAT (délai de 48 h). ${soc2.cafat ? "Déclaration en ligne sur l'espace Pro CAFAT" : "Formulaire papier (onglet Contrats → Fin de contrat → Déclaration de rupture)"}, puis cliquez « Déclarée ».` });
+    }
+    if (s.statut === "archive") continue;
     if (s.contrat === "CDD") {
       if (!s.sortie) out.push({ niv: "bad", s, txt: `${qui} (${soc}) : CDD sans date de fin dans la fiche. Vérifiez le contrat signé.` });
       else {
@@ -99,9 +104,14 @@ function insererAlertes(v) {
   const box = document.createElement("div"); box.className = "panel alertes-contrats"; box.style.marginBottom = "12px";
   const urgent = al.some((a) => a.niv === "bad");
   box.innerHTML = `<details ${urgent || S.alertesOuvertes ? "open" : ""}><summary><b>Contrats à surveiller (${al.length})</b>${urgent ? ' <span class="chip bad">urgent</span>' : ""}</summary>
-    <ul class="alerts" style="margin-top:8px">${al.map((a, i) => `<li class="${a.niv}"><span>${esc(a.txt)}</span> <button class="link" data-al="${i}">Ouvrir la fiche</button></li>`).join("")}</ul></details>`;
+    <ul class="alerts" style="margin-top:8px">${al.map((a, i) => `<li class="${a.niv}"><span>${esc(a.txt)}</span> <button class="link" data-al="${i}">Ouvrir la fiche</button>${a.cafat ? ` <button class="link" data-decl="${i}">Déclarée</button>` : ""}</li>`).join("")}</ul></details>`;
   v.prepend(box);
   box.querySelector("details").ontoggle = (e) => (S.alertesOuvertes = e.target.open);
+  box.querySelectorAll("[data-decl]").forEach((b) => (b.onclick = async () => {
+    const s = al[b.dataset.decl].s;
+    try { await S.db.doc("salaries/" + s.id).update({ sortieCafat: today() }); toast(`Sortie de ${s.prenom} ${s.nom} notée comme déclarée à la CAFAT.`); }
+    catch (e) { toast("Modification refusée : " + (e.message || e.code)); }
+  }));
   box.querySelectorAll("[data-al]").forEach((b) => (b.onclick = () => {
     const s = al[b.dataset.al].s;
     S.tab = "salaries"; renderTabs();
@@ -765,7 +775,7 @@ function lierPieces(s) {
 /* ---- Salariés (gérant) ---- */
 const CHAMPS = [
   ["statut", "Statut", "sel:actif=Salarié,futur=Futur salarié (pas encore embauché),archive=Ancien salarié (archivé)"], ["civ", "Civilité", "text"], ["prenom", "Prénom", "text"], ["nom", "Nom", "text"], ["planningNoms", "Noms au planning (séparés par des virgules)", "list"],
-  ["matricule", "Matricule", "text"], ["cafat", "N° CAFAT", "text"], ["contrat", "Contrat", "sel:CDI,CDD"], ["entree", "Date d'entrée", "date"], ["ancienneteDepuis", "Ancienneté depuis", "date"], ["sortie", "Date de sortie", "date"], ["finEssai", "Fin de la période d'essai", "date"], ["motifSortie", "Motif de sortie", "sel:=—,fin_cdd=Fin de CDD,demission=Démission,essai=Rupture de la période d'essai,licenciement=Licenciement,rc_employeur=Rupture conventionnelle (employeur),rc_salarie=Rupture conventionnelle (salarié),autre=Autre"],
+  ["matricule", "Matricule", "text"], ["cafat", "N° CAFAT", "text"], ["contrat", "Contrat", "sel:CDI,CDD"], ["entree", "Date d'entrée", "date"], ["ancienneteDepuis", "Ancienneté depuis", "date"], ["sortie", "Date de sortie", "date"], ["finEssai", "Fin de la période d'essai", "date"], ["motifSortie", "Motif de sortie", "sel:=—,fin_cdd=Fin de CDD,demission=Démission,essai=Rupture de la période d'essai,licenciement=Licenciement,rc_employeur=Rupture conventionnelle (employeur),rc_salarie=Rupture conventionnelle (salarié),autre=Autre"], ["sortieCafat", "Sortie déclarée à la CAFAT le", "date"],
   ["qualif", "Qualification", "text"], ["emploi", "Emploi", "text"], ["base", "Salaire de base brut (F)", "num"], ["heuresMois", "Heures par mois", "num"], ["hebdo", "Durée hebdo du contrat (h)", "num"],
   ["anc", "Prime d'ancienneté (%)", "num"], ["mutuelle", "Mutuelle", "sel:0=Aucune,1=Salarié,2=Salarié + ayants droit"], ["repasOfferts", "Repas offerts (pas de part salarié)", "bool"], ["sansAssiduite", "Pas de prime d'assiduité", "bool"],
   ["cpSolde", "Solde de congés (jours)", "num"], ["cpN1", "dont année précédente (jours)", "num"], ["cumBrut", "Cumul brut de l'année (F)", "num"], ["cumNet", "Cumul net imposable (F)", "num"], ["brutAnterieur", "Brut déjà versé sur le contrat (CDD)", "num"],
