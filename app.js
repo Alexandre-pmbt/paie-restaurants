@@ -172,9 +172,30 @@ function lirePlanning(file) {
       const ws = wb.Sheets[wb.SheetNames[0]];
       const res = PAIE.parsePlanning(ws, XLSX);
       if (!Object.keys(res.salaries).length) { toast("Aucun salarié trouvé dans ce fichier : vérifiez qu'il s'agit du planning."); return; }
+      // Mois couvert par le planning (mois majoritaire des jours datés)
+      const cpt = {};
+      for (const p of Object.values(res.salaries)) for (const j of p.jours || []) if (j.d) cpt[j.d.slice(0, 7)] = (cpt[j.d.slice(0, 7)] || 0) + 1;
+      const dom = Object.keys(cpt).sort((x, y) => cpt[y] - cpt[x])[0];
+      let bascule = "";
+      if (dom && dom !== S.mois) {
+        bascule = `Le planning couvre ${moisLib(dom).toLowerCase()} : le mois sélectionné (${moisLib(S.mois).toLowerCase()}) a été changé automatiquement.`;
+        S.mois = dom; $("#selMois").value = dom; store.set("paie.mois", dom); resub();
+      }
+      const alertes = [...res.alertes];
+      if (bascule) alertes.unshift(bascule);
+      // Noms du planning absents des fiches de la société (gérant)
+      if (S.admin && S.salaries.length) {
+        const connus = new Set(S.salaries.flatMap((x) => (x.planningNoms && x.planningNoms.length ? x.planningNoms : [x.prenom]).map(PAIE.normNom)));
+        const inconnus = Object.keys(res.salaries).filter((k) => !connus.has(PAIE.normNom(k)) && !/^TOTAL/i.test(k));
+        if (inconnus.length) {
+          const autre = (S.tous || []).filter((x) => x.societe !== S.soc && inconnus.some((k) => (x.planningNoms || [x.prenom]).map(PAIE.normNom).includes(PAIE.normNom(k))));
+          const socAutre = autre.length ? (S.socs.find((x) => x.id === autre[0].societe) || {}).nom : "";
+          alertes.unshift(`Noms inconnus pour ${socDoc().nom} : ${inconnus.join(", ")}.${inconnus.length > Object.keys(res.salaries).length / 2 && socAutre ? ` Ce planning semble être celui de ${socAutre} : vérifiez la société sélectionnée en haut de page avant d'enregistrer.` : " Ajoutez ces noms dans la fiche du salarié (champ « Noms au planning »), sinon leurs heures ne seront pas payées."}`);
+        }
+      }
       const old = (S.saisie && S.saisie.variables) || {};
-      S.parsed = { planning: res.salaries, alertes: res.alertes, semaines: res.semaines, variables: { ...old }, fichier: file.name };
-      render(); toast(`${Object.keys(res.salaries).length} salariés lus dans le planning. Vérifiez puis enregistrez.`);
+      S.parsed = { planning: res.salaries, alertes, semaines: res.semaines, variables: { ...old }, fichier: file.name };
+      render(); toast(bascule || `${Object.keys(res.salaries).length} salariés lus dans le planning. Vérifiez puis enregistrez.`);
     } catch (e) { console.error(e); toast("Lecture du fichier impossible : " + e.message); }
   };
   fr.readAsArrayBuffer(file);
