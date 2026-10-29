@@ -35,6 +35,7 @@ function resub() {
     S.unsub.push(S.db.collection("salaries").where("societe", "==", S.soc).onSnapshot((q) => { S.salaries = q.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.ordre ?? 99) - (b.ordre ?? 99) || a.nom.localeCompare(b.nom)); render(); }, err));
     S.unsub.push(S.db.doc("ajustements/" + cle()).onSnapshot((d) => { S.ajust = d.exists ? (d.data().par || {}) : {}; render(); }, err));
     S.unsub.push(S.db.collection("documents").where("societe", "==", S.soc).onSnapshot((q) => { S.docs = q.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.le || "").localeCompare(a.le || "")); if (S.tab === "contrats") render(); }, err));
+    S.unsub.push(S.db.collection("salaries").onSnapshot((q) => { S.tous = q.docs.map((d) => ({ id: d.id, ...d.data() })); render(); }, err));
     S.unsub.push(S.db.doc("clotures/" + cle()).onSnapshot((d) => { S.cloture = d.exists ? d.data() : null; render(); }, err));
   }
 }
@@ -67,6 +68,48 @@ function resultats() {
 
 /* ---------- Vues ---------- */
 function render() {
+  renderVue();
+  if (S.admin && S.profil && S.tab !== "equipe") insererAlertes($("#view"));
+}
+/* ---- Alertes : fins de CDD et de périodes d'essai, toutes sociétés ---- */
+function alertesContrats() {
+  const auj = today(), jours = (d) => Math.round((new Date(d + "T00:00:00Z") - new Date(auj + "T00:00:00Z")) / 86400000);
+  const nomSoc = (id) => (S.socs.find((x) => x.id === id) || {}).nom || id;
+  const out = [];
+  for (const s of S.tous || []) {
+    if (s.statut === "futur") continue;
+    const qui = `${s.prenom || ""} ${s.nom || ""}`.trim(), soc = nomSoc(s.societe);
+    if (s.contrat === "CDD") {
+      if (!s.sortie) out.push({ niv: "bad", s, txt: `${qui} (${soc}) : CDD sans date de fin dans la fiche. Vérifiez le contrat signé.` });
+      else {
+        const j = jours(s.sortie);
+        if (j >= 0 && j <= 15) out.push({ niv: j <= 5 ? "bad" : "", s, j, txt: `${qui} (${soc}) : le CDD se termine le ${frDate(s.sortie)} (${j === 0 ? "aujourd'hui" : j === 1 ? "demain" : "dans " + j + " jours"}). Pour le garder, faites signer un avenant de renouvellement avant cette date ; sinon préparez la fin de contrat.` });
+        else if (j < 0 && j >= -10 && !s.motifSortie) out.push({ niv: "bad", s, j, txt: `${qui} (${soc}) : CDD terminé le ${frDate(s.sortie)}. S'il ou elle travaille encore, le contrat est devenu un CDI ; sinon éditez la fin de contrat (onglet Contrats).` });
+      }
+    }
+    if (s.finEssai) {
+      const j = jours(s.finEssai);
+      if (j >= 0 && j <= 15) out.push({ niv: "", s, j, txt: `${qui} (${soc}) : la période d'essai se termine le ${frDate(s.finEssai)} (${j === 0 ? "aujourd'hui" : "dans " + j + " jours"}).` });
+    }
+  }
+  return out.sort((a, b) => (a.j ?? -99) - (b.j ?? -99));
+}
+function insererAlertes(v) {
+  const al = alertesContrats(); if (!al.length || !v) return;
+  const box = document.createElement("div"); box.className = "panel alertes-contrats"; box.style.marginBottom = "12px";
+  const urgent = al.some((a) => a.niv === "bad");
+  box.innerHTML = `<details ${urgent || S.alertesOuvertes ? "open" : ""}><summary><b>Contrats à surveiller (${al.length})</b>${urgent ? ' <span class="chip bad">urgent</span>' : ""}</summary>
+    <ul class="alerts" style="margin-top:8px">${al.map((a, i) => `<li class="${a.niv}"><span>${esc(a.txt)}</span> <button class="link" data-al="${i}">Ouvrir la fiche</button></li>`).join("")}</ul></details>`;
+  v.prepend(box);
+  box.querySelector("details").ontoggle = (e) => (S.alertesOuvertes = e.target.open);
+  box.querySelectorAll("[data-al]").forEach((b) => (b.onclick = () => {
+    const s = al[b.dataset.al].s;
+    S.tab = "salaries"; renderTabs();
+    if (S.soc !== s.societe) { S.soc = s.societe; store.set("paie.soc", S.soc); $("#selSoc").value = S.soc; resub(); }
+    S.sel = s.id; S.editNew = false; render();
+  }));
+}
+function renderVue() {
   const v = $("#view");
   if (!S.profil) return;
   if (S.admin) store.set("paie.tab", S.tab);
@@ -429,7 +472,7 @@ async function editerCt() {
     await S.db.collection("documents").add({ societe: S.soc, salarie: s.id, libelle: lib, le: new Date().toISOString(), params: { ...c } });
     if (c.majFiche) {
       const m = {};
-      if (c.type !== "AVENANT") Object.assign(m, { statut: "actif", contrat: c.type, entree: c.cddDebut || c.debut, sortie: c.type === "CDD" ? c.fin || null : null, hebdo: p.hebdo, heuresMois: p.heuresMois, base: p.salaire, emploi: c.emploi, qualif: "Catégorie " + ROM[p.categorie], ancienneteDepuis: c.type === "CDI" ? (c.ancienneteDepuis || null) : (s.ancienneteDepuis || null) });
+      if (c.type !== "AVENANT") Object.assign(m, { finEssai: p.essaiJours ? p.finEssai : null, statut: "actif", contrat: c.type, entree: c.cddDebut || c.debut, sortie: c.type === "CDD" ? c.fin || null : null, hebdo: p.hebdo, heuresMois: p.heuresMois, base: p.salaire, emploi: c.emploi, qualif: "Catégorie " + ROM[p.categorie], ancienneteDepuis: c.type === "CDI" ? (c.ancienneteDepuis || null) : (s.ancienneteDepuis || null) });
       else if (c.sous === "renouvellement") m.sortie = c.nouveauTerme || s.sortie;
       else if (c.sous === "duree") Object.assign(m, { hebdo: p.hebdo, heuresMois: p.heuresMois, base: p.salaire });
       else if (c.sous === "promotion") Object.assign(m, { emploi: c.emploi, qualif: "Catégorie " + ROM[p.categorie], heuresMois: p.heuresMois, base: p.salaire });
@@ -698,7 +741,7 @@ function lierPieces(s) {
 /* ---- Salariés (gérant) ---- */
 const CHAMPS = [
   ["statut", "Statut", "sel:actif=Salarié (en poste ou sorti),futur=Futur salarié (pas encore embauché)"], ["civ", "Civilité", "text"], ["prenom", "Prénom", "text"], ["nom", "Nom", "text"], ["planningNoms", "Noms au planning (séparés par des virgules)", "list"],
-  ["matricule", "Matricule", "text"], ["cafat", "N° CAFAT", "text"], ["contrat", "Contrat", "sel:CDI,CDD"], ["entree", "Date d'entrée", "date"], ["ancienneteDepuis", "Ancienneté depuis", "date"], ["sortie", "Date de sortie", "date"], ["motifSortie", "Motif de sortie", "sel:=—,fin_cdd=Fin de CDD,demission=Démission,essai=Rupture de la période d'essai,licenciement=Licenciement,rc_employeur=Rupture conventionnelle (employeur),rc_salarie=Rupture conventionnelle (salarié),autre=Autre"],
+  ["matricule", "Matricule", "text"], ["cafat", "N° CAFAT", "text"], ["contrat", "Contrat", "sel:CDI,CDD"], ["entree", "Date d'entrée", "date"], ["ancienneteDepuis", "Ancienneté depuis", "date"], ["sortie", "Date de sortie", "date"], ["finEssai", "Fin de la période d'essai", "date"], ["motifSortie", "Motif de sortie", "sel:=—,fin_cdd=Fin de CDD,demission=Démission,essai=Rupture de la période d'essai,licenciement=Licenciement,rc_employeur=Rupture conventionnelle (employeur),rc_salarie=Rupture conventionnelle (salarié),autre=Autre"],
   ["qualif", "Qualification", "text"], ["emploi", "Emploi", "text"], ["base", "Salaire de base brut (F)", "num"], ["heuresMois", "Heures par mois", "num"], ["hebdo", "Durée hebdo du contrat (h)", "num"],
   ["anc", "Prime d'ancienneté (%)", "num"], ["mutuelle", "Mutuelle", "sel:0=Aucune,1=Salarié,2=Salarié + ayants droit"], ["repasOfferts", "Repas offerts (pas de part salarié)", "bool"], ["sansAssiduite", "Pas de prime d'assiduité", "bool"],
   ["cpSolde", "Solde de congés (jours)", "num"], ["cpN1", "dont année précédente (jours)", "num"], ["cumBrut", "Cumul brut de l'année (F)", "num"], ["cumNet", "Cumul net imposable (F)", "num"], ["brutAnterieur", "Brut déjà versé sur le contrat (CDD)", "num"],
