@@ -77,7 +77,7 @@ function alertesContrats() {
   const nomSoc = (id) => (S.socs.find((x) => x.id === id) || {}).nom || id;
   const out = [];
   for (const s of S.tous || []) {
-    if (s.statut === "futur") continue;
+    if (s.statut === "futur" || s.statut === "archive") continue;
     const qui = `${s.prenom || ""} ${s.nom || ""}`.trim(), soc = nomSoc(s.societe);
     if (s.contrat === "CDD") {
       if (!s.sortie) out.push({ niv: "bad", s, txt: `${qui} (${soc}) : CDD sans date de fin dans la fiche. Vérifiez le contrat signé.` });
@@ -416,7 +416,7 @@ function blocsCt() {
 }
 function renderContrats(v) {
   if (!S.salaries.length) { v.innerHTML = `<div class="empty">Ajoutez d'abord les salariés dans l'onglet Salariés : les contrats sont rédigés à partir de leur fiche.</div>`; return; }
-  if (!S.ct || !S.salaries.find((x) => x.id === S.ct.sal)) S.ct = initCt(S.salaries[0]);
+  if (!S.ct || !S.salaries.find((x) => x.id === S.ct.sal)) S.ct = initCt(S.salaries.find((x) => x.statut !== "archive") || S.salaries[0]);
   const c = S.ct; const fld = (k, l, type = "text", attrs = "") => `<label>${esc(l)}<input id="ct_${k}" data-ct="${k}" type="${type}" ${attrs} value="${esc(c[k] ?? "")}"></label>`;
   const sel = (k, l, opts) => `<label>${esc(l)}<select id="ct_${k}" data-ct="${k}">${opts.map(([val, lab]) => `<option value="${esc(val)}" ${String(c[k]) === String(val) ? "selected" : ""}>${esc(lab)}</option>`).join("")}</select></label>`;
   const cats = [1, 2, 3, 4, 5, 6, 7].map((n) => [n, "Catégorie " + ROM[n]]);
@@ -442,7 +442,7 @@ function renderContrats(v) {
   v.innerHTML = `<div class="split">
     <div class="panel"><h2>Contrats, avenants et fins de contrat</h2>
       <div class="form">
-        <label>Salarié<select id="ct_sal">${S.salaries.map((s) => `<option value="${esc(s.id)}" ${s.id === c.sal ? "selected" : ""}>${esc(s.prenom)} ${esc(s.nom)}</option>`).join("")}</select></label>
+        <label>Salarié<select id="ct_sal">${(() => { const o = (s) => `<option value="${esc(s.id)}" ${s.id === c.sal ? "selected" : ""}>${esc(s.prenom)} ${esc(s.nom)}</option>`; const a = S.salaries.filter((s) => s.statut === "archive"); return S.salaries.filter((s) => s.statut !== "archive").map(o).join("") + (a.length ? `<optgroup label="Anciens salariés (archivés)">${a.map(o).join("")}</optgroup>` : ""); })()}</select></label>
         <label>Document<select id="ct_type">${[["CDI", "Contrat CDI"], ["CDD", "Contrat CDD"], ["AVENANT", "Avenant"], ["FIN", "Fin de contrat"]].map(([val, l]) => `<option value="${val}" ${c.type === val ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       </div>
       <p class="small muted" style="margin:0">Pour une embauche, créez d'abord la fiche dans l'onglet Salariés (état civil, adresse, n° CAFAT), puis revenez ici.</p>
@@ -450,6 +450,7 @@ function renderContrats(v) {
       <div class="form" id="ctForm">${champs}</div>
       <ul class="alerts" id="ctWarn"></ul>
       <label class="check small"><input type="checkbox" id="ct_maj" ${c.majFiche ? "checked" : ""}> ${c.type === "FIN" ? "Inscrire la date et le motif de sortie dans la fiche salarié" : "Mettre à jour la fiche salarié (contrat, horaires, salaire) après l'édition"}</label>
+      ${c.type === "FIN" ? `<label class="check small"><input type="checkbox" id="ct_archiver" data-ct="archiver" ${c.archiver !== false ? "checked" : ""}> Archiver le salarié après l'édition (retiré de la liste des salariés ; son dernier bulletin reste calculé jusqu'à la date de sortie)</label>` : ""}
       <div class="row"><button class="primary" id="ctWord">${c.type === "FIN" && c.finDoc === "rupture" ? "Télécharger le formulaire CAFAT (PDF)" : "Télécharger en Word"}</button></div>
       <h3>Documents édités pour ce salarié</h3>
       ${hist.length ? `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Document</th><th></th></tr></thead><tbody>${hist.map((d) => `<tr><td>${esc(frDate(d.le.slice(0, 10)))}</td><td>${esc(d.libelle)}</td><td><button class="link" data-redo="${esc(d.id)}">Rééditer</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="small muted" style="margin:0">Aucun document édité depuis l'application.</p>`}
@@ -589,9 +590,11 @@ async function editerFin(c, s, lib) {
       await enregistrerFichier(nomFichier(`${c.finDoc === "solde" ? "Solde_de_tout_compte" : "Certificat_de_travail"}_${s.nom}_${s.prenom}.docx`), buf);
     }
     await S.db.collection("documents").add({ societe: S.soc, salarie: s.id, libelle: lib, le: new Date().toISOString(), params: { ...c } });
-    if (c.majFiche && c.sortie && (s.sortie !== c.sortie || (c.finDoc === "rupture" && s.motifSortie !== c.motifFin))) {
+    const archiver = c.archiver !== false && c.sortie && s.statut !== "archive";
+    if ((c.majFiche && c.sortie && (s.sortie !== c.sortie || (c.finDoc === "rupture" && s.motifSortie !== c.motifFin))) || archiver) {
       const m = { sortie: c.sortie }; if (c.finDoc === "rupture") m.motifSortie = c.motifFin;
-      await S.db.doc("salaries/" + s.id).update(m); toast("Document enregistré, date de sortie inscrite dans la fiche.");
+      if (archiver) Object.assign(m, { statut: "archive", archiveLe: new Date().toISOString() });
+      await S.db.doc("salaries/" + s.id).update(m); toast(archiver ? "Document enregistré ; salarié archivé (retiré de la liste des salariés)." : "Document enregistré, date de sortie inscrite dans la fiche.");
     } else toast("Document enregistré dans l'historique.");
   } catch (e) { toast("Édition impossible : " + (e.message || e.code)); }
 }
@@ -761,7 +764,7 @@ function lierPieces(s) {
 
 /* ---- Salariés (gérant) ---- */
 const CHAMPS = [
-  ["statut", "Statut", "sel:actif=Salarié (en poste ou sorti),futur=Futur salarié (pas encore embauché)"], ["civ", "Civilité", "text"], ["prenom", "Prénom", "text"], ["nom", "Nom", "text"], ["planningNoms", "Noms au planning (séparés par des virgules)", "list"],
+  ["statut", "Statut", "sel:actif=Salarié,futur=Futur salarié (pas encore embauché),archive=Ancien salarié (archivé)"], ["civ", "Civilité", "text"], ["prenom", "Prénom", "text"], ["nom", "Nom", "text"], ["planningNoms", "Noms au planning (séparés par des virgules)", "list"],
   ["matricule", "Matricule", "text"], ["cafat", "N° CAFAT", "text"], ["contrat", "Contrat", "sel:CDI,CDD"], ["entree", "Date d'entrée", "date"], ["ancienneteDepuis", "Ancienneté depuis", "date"], ["sortie", "Date de sortie", "date"], ["finEssai", "Fin de la période d'essai", "date"], ["motifSortie", "Motif de sortie", "sel:=—,fin_cdd=Fin de CDD,demission=Démission,essai=Rupture de la période d'essai,licenciement=Licenciement,rc_employeur=Rupture conventionnelle (employeur),rc_salarie=Rupture conventionnelle (salarié),autre=Autre"],
   ["qualif", "Qualification", "text"], ["emploi", "Emploi", "text"], ["base", "Salaire de base brut (F)", "num"], ["heuresMois", "Heures par mois", "num"], ["hebdo", "Durée hebdo du contrat (h)", "num"],
   ["anc", "Prime d'ancienneté (%)", "num"], ["mutuelle", "Mutuelle", "sel:0=Aucune,1=Salarié,2=Salarié + ayants droit"], ["repasOfferts", "Repas offerts (pas de part salarié)", "bool"], ["sansAssiduite", "Pas de prime d'assiduité", "bool"],
@@ -770,18 +773,29 @@ const CHAMPS = [
 ];
 function renderSalaries(v) {
   const sel = S.salaries.find((s) => s.id === S.sel) || null;
+  const nbArch = S.salaries.filter((x) => x.statut === "archive").length;
+  const liste = S.salaries.filter((x) => (x.statut === "archive") === !!S.voirArchives);
   const editing = S.editNew ? { societe: S.soc, statut: "futur", contrat: "CDI", heuresMois: 169, hebdo: 39, mutuelle: 0, anc: 0, cpSolde: 0, cpN1: 0 } : sel;
   v.innerHTML = `<div class="split">
-    <div class="panel"><div class="row"><h2 class="grow">Salariés de ${esc(socDoc().nom)}</h2><button id="addSal">Ajouter un salarié</button></div>
+    <div class="panel"><div class="row"><h2 class="grow">${S.voirArchives ? "Anciens salariés" : "Salariés"} de ${esc(socDoc().nom)}</h2>${S.voirArchives ? "" : `<button id="addSal">Ajouter un salarié</button>`}</div>
+      <div class="row small"><button class="link" id="togArch">${S.voirArchives ? "← Revenir aux salariés en poste" : `Voir les anciens salariés archivés (${nbArch})`}</button></div>
       <div class="tbl-wrap"><table><thead><tr><th>Salarié</th><th>Contrat</th><th class="num">Base</th><th class="num">CP</th></tr></thead><tbody>
-      ${S.salaries.map((s) => `<tr class="click ${s.id === S.sel && !S.editNew ? "sel" : ""}" data-id="${esc(s.id)}"><td>${esc(s.prenom)} ${esc(s.nom)} ${s.statut === "futur" ? `<span class="chip">À embaucher</span>` : s.sortie && s.sortie < S.mois + "-01" ? `<span class="chip">Sorti</span>` : ""}${(s.pieces || []).length ? ` <span class="small muted" title="Pièces jointes">📎${s.pieces.length}</span>` : ""}</td><td>${esc(s.contrat || "")} ${s.hebdo ? esc(String(s.hebdo).replace(".", ",")) + " h" : ""}</td><td class="num">${F(Number(s.base) || 0)}</td><td class="num">${String(s.cpSolde ?? 0).replace(".", ",")}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Aucun salarié.</td></tr>`}
+      ${liste.map((s) => `<tr class="click ${s.id === S.sel && !S.editNew ? "sel" : ""}" data-id="${esc(s.id)}"><td>${esc(s.prenom)} ${esc(s.nom)} ${s.statut === "futur" ? `<span class="chip">À embaucher</span>` : s.statut === "archive" ? `<span class="chip">Archivé · sorti le ${esc(frDate(s.sortie))}</span>` : s.sortie && s.sortie < S.mois + "-01" ? `<span class="chip">Sorti</span>` : ""}${(s.pieces || []).length ? ` <span class="small muted" title="Pièces jointes">📎${s.pieces.length}</span>` : ""}</td><td>${esc(s.contrat || "")} ${s.hebdo ? esc(String(s.hebdo).replace(".", ",")) + " h" : ""}</td><td class="num">${F(Number(s.base) || 0)}</td><td class="num">${String(s.cpSolde ?? 0).replace(".", ",")}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">${S.voirArchives ? "Aucun salarié archivé." : "Aucun salarié."}</td></tr>`}
       </tbody></table></div></div>
     <div class="panel">${editing ? `<h2>${S.editNew ? "Nouveau salarié" : esc(editing.prenom + " " + editing.nom)}</h2>
       <form class="form" id="salForm">${CHAMPS.map(([k, l, t]) => champ(k, l, t, editing[k])).join("")}
-      <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">Enregistrer la fiche</button>${S.editNew ? `<button type="button" id="cancelNew">Annuler</button>` : ""}</div></form>
+      <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">Enregistrer la fiche</button>${S.editNew ? `<button type="button" id="cancelNew">Annuler</button>` : editing.statut === "archive" ? `<button type="button" id="archBtn" data-a="0">Réintégrer dans les salariés</button>` : `<button type="button" id="archBtn" data-a="1">Archiver (fin de contrat)</button>`}</div></form>
       ${S.editNew ? `<p class="small muted" style="margin:0">Enregistrez la fiche pour pouvoir y joindre les pièces d'identité.</p>` : blocPieces(editing)}` : `<div class="empty">Sélectionnez un salarié pour voir ou modifier sa fiche.</div>`}</div></div>`;
   document.querySelectorAll("tr[data-id]").forEach((tr) => (tr.onclick = () => { S.sel = tr.dataset.id; S.editNew = false; render(); }));
-  $("#addSal").onclick = () => { S.editNew = true; render(); };
+  if ($("#addSal")) $("#addSal").onclick = () => { S.editNew = true; S.voirArchives = false; render(); };
+  $("#togArch").onclick = () => { S.voirArchives = !S.voirArchives; S.sel = null; S.editNew = false; render(); };
+  if ($("#archBtn")) $("#archBtn").onclick = async (e) => {
+    const b = e.target, arch = b.dataset.a === "1";
+    if (arch && !sel.sortie) { toast("Indiquez d'abord la date de sortie dans la fiche (ou éditez la fin de contrat dans l'onglet Contrats)."); return; }
+    if (arch && b.dataset.ok !== "1") { b.dataset.ok = "1"; b.textContent = "Confirmer l'archivage ?"; setTimeout(() => { b.dataset.ok = ""; b.textContent = "Archiver (fin de contrat)"; }, 4000); return; }
+    try { await S.db.doc("salaries/" + sel.id).update({ statut: arch ? "archive" : "actif", archiveLe: arch ? new Date().toISOString() : null }); S.sel = null; toast(arch ? `${sel.prenom} ${sel.nom} archivé(e) : retiré(e) de la liste. Son dernier bulletin reste calculé jusqu'à sa date de sortie.` : "Salarié réintégré."); }
+    catch (e2) { toast("Modification refusée : " + (e2.message || e2.code)); }
+  };
   if ($("#cancelNew")) $("#cancelNew").onclick = () => { S.editNew = false; render(); };
   if (sel && !S.editNew) lierPieces(sel);
   const f = $("#salForm");
