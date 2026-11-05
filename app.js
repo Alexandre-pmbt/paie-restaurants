@@ -132,7 +132,7 @@ function renderVue() {
   if (S.tab === "contrats") return renderContrats(v);
   if (S.tab === "cafat") return renderCafat(v);
   if (S.tab === "equipe") return renderEquipe(v);
-  if (S.tab === "societe") { renderSociete(v); return ajouterOutilsSociete(v); }
+  if (S.tab === "societe") { renderSociete(v); ajouterOutilsSociete(v); return renderArchives(v); }
 }
 
 /* ---- Saisie du mois (gérant + responsables) ---- */
@@ -783,6 +783,37 @@ function lierPieces(s) {
       toast("Pièce supprimée.");
     } catch (e) { toast("Suppression impossible : " + (e.message || e)); }
   }));
+}
+
+/* ---- Archives de la société (stockage privé, gérants uniquement) ---- */
+async function renderArchives(v) {
+  const box = document.createElement("div"); box.className = "panel"; box.style.marginTop = "12px";
+  box.innerHTML = `<h2>Archives de ${esc(socDoc().nom)}</h2><p class="small muted" style="margin:0">Bulletins, livres de paie, registres, déclarations, sauvegardes de l'ancien prestataire… Fichiers stockés dans l'espace privé, visibles par les gérants uniquement (50 Mo maximum par fichier).</p>
+    <div class="row"><input type="file" id="arcFic" multiple><span class="small muted grow" id="arcEtat"></span></div><div id="arcListe" class="small muted">Chargement…</div>`;
+  v.appendChild(box);
+  const dossier = `${S.soc}/archives`;
+  const lister = async () => {
+    const { data, error } = await S.sb.storage.from(BUCKET).list(dossier, { limit: 500, sortBy: { column: "name", order: "asc" } });
+    const el = $("#arcListe"); if (!el) return;
+    if (error) { el.textContent = "Lecture impossible : " + error.message; return; }
+    const fichiers = (data || []).filter((f) => f.id);
+    el.innerHTML = fichiers.length ? `<div class="tbl-wrap"><table><thead><tr><th>Fichier</th><th class="num">Taille</th><th>Déposé le</th><th></th></tr></thead><tbody>${fichiers.map((f) => `<tr><td>${esc(f.name.replace(/^\d+-/, ""))}</td><td class="num">${Math.max(1, Math.round((f.metadata?.size || 0) / 1024))} Ko</td><td>${esc(frDate((f.created_at || "").slice(0, 10)))}</td><td><button class="link" data-arc="${esc(f.name)}">Télécharger</button></td></tr>`).join("")}</tbody></table></div>` : "Aucun fichier archivé.";
+    el.querySelectorAll("[data-arc]").forEach((b) => (b.onclick = async () => {
+      const { data: d, error: e } = await S.sb.storage.from(BUCKET).createSignedUrl(`${dossier}/${b.dataset.arc}`, 120, { download: b.dataset.arc.replace(/^\d+-/, "") });
+      if (e) { toast("Téléchargement impossible : " + e.message); return; } location.assign(d.signedUrl);
+    }));
+  };
+  $("#arcFic").onchange = async (e) => {
+    const files = [...e.target.files]; let ok = 0;
+    for (const f of files) {
+      $("#arcEtat").textContent = `Envoi de ${f.name}…`;
+      const nom = `${Date.now()}-${f.name.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w.\-]+/g, "_")}`;
+      const { error } = await S.sb.storage.from(BUCKET).upload(`${dossier}/${nom}`, f, { contentType: f.type || "application/octet-stream" });
+      if (error) toast(`${f.name} : ${error.message}`); else ok++;
+    }
+    $("#arcEtat").textContent = ""; if (ok) toast(`${ok} fichier(s) archivé(s).`); e.target.value = ""; lister();
+  };
+  lister();
 }
 
 /* ---- Salariés (gérant) ---- */

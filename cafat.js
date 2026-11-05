@@ -85,7 +85,9 @@ const CAFAT = (() => {
       { k: "fsh", lib: "FSH", taux: p.tauxFSH },
     ].map((x) => { const assiette = sum(x.k); return { ...x, assiette, montant: x.taux == null ? null : r(assiette * x.taux / 100) }; });
     const alertes = [];
-    if (moisManquants.length) alertes.push(`Mois non clôturés dans l'application : ${moisManquants.join(", ")}. Saisissez le brut et les heures de ces mois dans la colonne « Reprise » (salaires payés hors application), ou clôturez-les.`);
+    const avecReprise = Object.values(reprises).some((x) => Number(x.brut));
+    if (moisManquants.length && !avecReprise) alertes.push(`Mois non clôturés dans l'application : ${moisManquants.join(", ")}. Saisissez le brut et les heures de ces mois dans la colonne « Reprise » (salaires payés hors application), ou clôturez-les.`);
+    else if (moisManquants.length) alertes.push(`Mois ${moisManquants.join(", ")} pris en compte par la colonne « Reprise » (salaires payés hors application) : vérifiez qu'elle couvre bien ces mois en entier, pour tous les salariés.`);
     if (postes.find((x) => x.k === "ruamm2").assiette > 0 && p.tauxRuamm2 == null) alertes.push("Un salarié dépasse le plafond RUAMM tranche 1 : renseignez le taux RUAMM tranche 2 dans l'onglet Société.");
     lignes.filter((l) => l.sansCafat).forEach((l) => alertes.push(`${l.prenoms} ${l.nom} : numéro d'assuré CAFAT manquant dans la fiche salarié.`));
     if (!p.tauxATMP) alertes.push("Taux accident du travail (ATMP) à 0 : renseignez-le dans les cotisations de la société.");
