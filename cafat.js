@@ -93,6 +93,13 @@ const CAFAT = (() => {
   }
 
   /* ---------- Remplissage des formulaires (pdf-lib) ---------- */
+  /* Signature du gérant (PNG transparent) placée dans un cadre : x, top, largeur, hauteur max (points, origine en haut) */
+  async function apposer(doc, page, png, x, top, w, h) {
+    if (!png) return;
+    const img = await doc.embedPng(png); const k = Math.min(w / img.width, h / img.height);
+    const dw = img.width * k, dh = img.height * k;
+    page.drawImage(img, { x: x + (w - dw) / 2, y: page.getHeight() - top - h + (h - dh) / 2, width: dw, height: dh });
+  }
   async function chargerPolice(doc) { return { f: await doc.embedFont(PDFLib.StandardFonts.Helvetica), b: await doc.embedFont(PDFLib.StandardFonts.HelveticaBold) }; }
   const pdfSafe = (s) => String(s ?? "").normalize("NFC").replace(/[’‘]/g, "'").replace(/[^\x20-\x7E -ÿ]/g, "");
   function writer(page, F) {
@@ -149,6 +156,7 @@ const CAFAT = (() => {
     if (MOTIFS[d.motif]) w.croix(...MOTIFS[d.motif], 8.5, d.motif.startsWith("rc_") ? 8.0 : 8.8);
     w.cases([184.0, 196.9, 219.1, 232.0, 255.9, 268.9, 281.8, 294.6], 733.5, 12.8, 14.2, dmy(d.dateDoc));
     w.texte(335, 742, 12, d.signataire || "", 8);
+    await apposer(doc, pg, d.signature, 395, 750, 130, 50);
     doc.removePage(1);
     return doc.save();
   }
@@ -185,6 +193,7 @@ const CAFAT = (() => {
     w.texte(93, 600.4, 14, d.email || "");
     if (d.dateDoc) { const [a, m, j] = d.dateDoc.split("-"); w.texte(196, 655, 10, j, 9); w.texte(234, 655, 10, m, 9); w.texte(276, 655, 10, a, 9); }
     w.texte(420, 655, 14, d.signataire || "", 8);
+    await apposer(doc, pg, d.signature, 450, 671, 100, 27);
     return doc.save();
   }
 
@@ -254,6 +263,7 @@ const CAFAT = (() => {
     if (!d.lignes.length) w.croix(262.4, 366.8, 9.8, 9.8);
     const dd = dmy(d.dateDoc);
     w.cases([620.8, 633.6], 494.5, 11.3, 11.3, dd.slice(0, 2)); w.cases([650.0, 662.9], 494.5, 11.3, 11.3, dd.slice(2, 4)); w.cases([679.3, 692.2, 705.1, 718.0], 494.5, 11.3, 11.3, dd.slice(4));
+    await apposer(doc, p3, d.signature, 620, 520, 110, 26);
     return doc.save();
   }
 

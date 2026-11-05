@@ -161,3 +161,21 @@ drop policy if exists "pieces_admin_delete" on storage.objects;
 create policy "pieces_admin_select" on storage.objects for select to authenticated using (bucket_id = 'pieces' and public.is_admin());
 create policy "pieces_admin_insert" on storage.objects for insert to authenticated with check (bucket_id = 'pieces' and public.is_admin());
 create policy "pieces_admin_delete" on storage.objects for delete to authenticated using (bucket_id = 'pieces' and public.is_admin());
+
+-- ---------- Signature personnelle : chaque compte ne voit et n'utilise que la sienne ----------
+create table if not exists public.signatures (
+  user_id uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  png text not null,
+  maj_le timestamptz not null default now()
+);
+alter table public.signatures enable row level security;
+drop policy if exists sig_lecture on public.signatures;
+drop policy if exists sig_creation on public.signatures;
+drop policy if exists sig_modif on public.signatures;
+drop policy if exists sig_suppr on public.signatures;
+create policy sig_lecture on public.signatures for select to authenticated using (user_id = auth.uid());
+create policy sig_creation on public.signatures for insert to authenticated with check (user_id = auth.uid());
+create policy sig_modif on public.signatures for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy sig_suppr on public.signatures for delete to authenticated using (user_id = auth.uid());
+revoke all on public.signatures from anon;
+grant select, insert, update, delete on public.signatures to authenticated;

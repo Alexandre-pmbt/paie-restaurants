@@ -471,6 +471,7 @@ function renderContrats(v) {
       <ul class="alerts" id="ctWarn"></ul>
       <label class="check small"><input type="checkbox" id="ct_maj" ${c.majFiche ? "checked" : ""}> ${c.type === "FIN" ? "Inscrire la date et le motif de sortie dans la fiche salarié" : "Mettre à jour la fiche salarié (contrat, horaires, salaire) après l'édition"}</label>
       ${c.type === "FIN" ? `<label class="check small"><input type="checkbox" id="ct_archiver" data-ct="archiver" ${c.archiver !== false ? "checked" : ""}> Archiver le salarié après l'édition (retiré de la liste des salariés ; son dernier bulletin reste calculé jusqu'à la date de sortie)</label>` : ""}
+      ${caseSigner()}
       <div class="row"><button class="primary" id="ctWord">${c.type === "FIN" && c.finDoc === "rupture" ? "Télécharger le formulaire CAFAT (PDF)" : "Télécharger en Word"}</button></div>
       <h3>Documents édités pour ce salarié</h3>
       ${hist.length ? `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Document</th><th></th></tr></thead><tbody>${hist.map((d) => `<tr><td>${esc(frDate(d.le.slice(0, 10)))}</td><td>${esc(d.libelle)}</td><td><button class="link" data-redo="${esc(d.id)}">Rééditer</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="small muted" style="margin:0">Aucun document édité depuis l'application.</p>`}
@@ -489,13 +490,14 @@ function renderContrats(v) {
     });
   });
   $("#ct_maj").onchange = (e) => (S.ct.majFiche = e.target.checked);
+  lierCaseSigner(apercuCt);
   $("#ctWord").onclick = editerCt;
   document.querySelectorAll("[data-redo]").forEach((b) => (b.onclick = () => { const d = (S.docs || []).find((x) => x.id === b.dataset.redo); if (d) { S.ct = { ...d.params }; render(); toast("Paramètres du document rechargés."); } }));
   apercuCt();
 }
 function apercuCt() {
   const { blocs, warn, html } = blocsCt();
-  $("#ctPrev").innerHTML = html || DOCX.html(blocs, esc);
+  $("#ctPrev").innerHTML = html || DOCX.html(blocs, esc, S.sig && S.signer ? S.sig : null);
   $("#ctWarn").innerHTML = warn.map((w) => `<li>${esc(w)}</li>`).join("");
 }
 function libelleCt(c, s) {
@@ -508,7 +510,7 @@ async function editerCt() {
   const c = S.ct; const lib = libelleCt(c, s);
   if (c.type === "FIN") return editerFin(c, s, lib);
   try {
-    const buf = await DOCX.build(blocs);
+    const buf = await DOCX.build(blocs, true, sigDocx());
     const nomF = `${lib.replace(/[^\w\- ]+/g, "").replace(/\s+/g, "_")}_${s.nom}_${s.prenom}.docx`.normalize("NFD").replace(/[̀-ͯ]/g, "");
     await enregistrerFichier(nomF, buf);
     await S.db.collection("documents").add({ societe: S.soc, salarie: s.id, libelle: lib, le: new Date().toISOString(), params: { ...c } });
@@ -601,12 +603,12 @@ async function editerFin(c, s, lib) {
   const soc = socDoc();
   try {
     if (c.finDoc === "rupture") {
-      const out = await CAFAT.remplirRupture(await chargerModele("cafat-rupture.pdf"), donneesRupture(soc, s, c));
+      const out = await CAFAT.remplirRupture(await chargerModele("cafat-rupture.pdf"), { ...donneesRupture(soc, s, c), signature: sigOctets() });
       await enregistrerFichier(nomFichier(`Declaration_rupture_CAFAT_${s.nom}_${s.prenom}.pdf`), new Blob([out], { type: "application/pdf" }));
     } else {
       const { blocs, warn } = blocsFin(soc, s, {});
       if (c.finDoc === "solde" && !blocs.find((b) => b.t === "tbl" && b.rows.length > 1)) { toast(warn[0] || "Bulletin de sortie introuvable."); return; }
-      const buf = await DOCX.build(blocs, false);
+      const buf = await DOCX.build(blocs, false, sigDocx());
       await enregistrerFichier(nomFichier(`${c.finDoc === "solde" ? "Solde_de_tout_compte" : "Certificat_de_travail"}_${s.nom}_${s.prenom}.docx`), buf);
     }
     await S.db.collection("documents").add({ societe: S.soc, salarie: s.id, libelle: lib, le: new Date().toISOString(), params: { ...c } });
@@ -677,7 +679,7 @@ function renderCafat(v) {
     <div class="row">
       <label class="check small"><input type="checkbox" id="cf_compl" ${S.cf.complementaire ? "checked" : ""}> Déclaration complémentaire</label>
       <label class="check small"><input type="checkbox" id="cf_prorat" ${S.cf.proratisation ? "checked" : ""}> Reporter les assiettes plafonnées par salarié (proratisation)</label>
-      <span class="grow"></span><button id="cf_xlsx">Récapitulatif Excel</button><button class="primary" id="cf_pdf">Formulaire DNT pré-rempli (PDF)</button></div>
+      ${caseSigner()}<span class="grow"></span><button id="cf_xlsx">Récapitulatif Excel</button><button class="primary" id="cf_pdf">Formulaire DNT pré-rempli (PDF)</button></div>
     <p class="small muted" style="margin:0">Taux appliqués : ceux de l'onglet Société (taux DNT et accident du travail). Les assiettes sont plafonnées au trimestre (3 × plafond mensuel).</p>
   </div>${immat}`;
   lierCafat(v, key, dnt);
@@ -688,7 +690,7 @@ function lierCafat(v, key, dnt) {
   $("#cf_immat").onclick = async () => {
     try {
       const adr = (soc.adresse || "").split("\n").map((x) => x.trim()).filter(Boolean);
-      const out = await CAFAT.remplirImmat(await chargerModele("cafat-immatriculation.pdf"), { forme: soc.forme, denomination: soc.nom, sigle: soc.sigle, activite: soc.activite, siege: soc.siege || adr[0] || "", correspondance: soc.correspondance || "", bp: soc.bp, cp: soc.cp, commune: soc.commune, tel: soc.tel, mobile: soc.mobile, email: soc.email, ridet: soc.ridet, rc: soc.rc, ape: soc.ape, localisation: soc.localisation || "", dateDoc: today(), signataire: `${(soc.representant || "").replace(/^(Monsieur|Madame)\s+/, "")}, ${soc.qualiteRep || "gérant"}` });
+      const out = await CAFAT.remplirImmat(await chargerModele("cafat-immatriculation.pdf"), { forme: soc.forme, denomination: soc.nom, sigle: soc.sigle, activite: soc.activite, siege: soc.siege || adr[0] || "", correspondance: soc.correspondance || "", bp: soc.bp, cp: soc.cp, commune: soc.commune, tel: soc.tel, mobile: soc.mobile, email: soc.email, ridet: soc.ridet, rc: soc.rc, ape: soc.ape, localisation: soc.localisation || "", dateDoc: today(), signataire: `${(soc.representant || "").replace(/^(Monsieur|Madame)\s+/, "")}, ${soc.qualiteRep || "gérant"}`, signature: sigOctets() });
       await enregistrerFichier(nomFichier(`Immatriculation_CAFAT_${soc.nom}.pdf`), new Blob([out], { type: "application/pdf" }));
     } catch (e) { toast("Édition impossible : " + e.message); }
   };
@@ -701,10 +703,11 @@ function lierCafat(v, key, dnt) {
     catch (e) { toast("Enregistrement refusé : " + (e.message || e.code)); }
   };
   $("#cf_compl").onchange = (e) => (S.cf.complementaire = e.target.checked);
+  lierCaseSigner();
   $("#cf_prorat").onchange = (e) => (S.cf.proratisation = e.target.checked);
   $("#cf_pdf").onclick = async () => {
     try {
-      const out = await CAFAT.remplirDNT(await chargerModele("cafat-dnt.pdf"), { ...dnt, compte: soc.cafat, ridet: soc.ridet, denomination: soc.nom, communeCode: soc.communeCode || "", et: soc.etablissement || String(soc.ridet || "").replace(/\D/g, "").slice(7, 10), codeCotisation: soc.codeCotisation || "", secteur: soc.secteur || "", dateDoc: today(), complementaire: S.cf.complementaire, proratisation: S.cf.proratisation });
+      const out = await CAFAT.remplirDNT(await chargerModele("cafat-dnt.pdf"), { ...dnt, compte: soc.cafat, ridet: soc.ridet, denomination: soc.nom, communeCode: soc.communeCode || "", et: soc.etablissement || String(soc.ridet || "").replace(/\D/g, "").slice(7, 10), codeCotisation: soc.codeCotisation || "", secteur: soc.secteur || "", dateDoc: today(), complementaire: S.cf.complementaire, proratisation: S.cf.proratisation, signature: sigOctets() });
       await enregistrerFichier(nomFichier(`DNT_${soc.nom}_${dnt.annee}-T${dnt.t}.pdf`), new Blob([out], { type: "application/pdf" }));
     } catch (e) { toast("Édition impossible : " + e.message); }
   };
@@ -1000,6 +1003,71 @@ function genMdp() {
   return Array.from(r, (x) => a[x % a.length]).join("");
 }
 const ROLES = { admin: "Gérant", responsable: "Responsable", inactif: "Désactivé" };
+/* ---- Signature personnelle (table « signatures », lisible uniquement par son titulaire) ---- */
+S.sig = null; S.signer = true;
+async function chargerSignature() {
+  S.sig = null;
+  try { const { data } = await S.sb.from("signatures").select("png").eq("user_id", S.profil.uid).maybeSingle(); S.sig = data ? data.png : null; } catch {}
+  if (S.tab === "contrats" || S.tab === "cafat" || S.tab === "equipe") render();
+}
+function sigOctets() {
+  if (!S.sig || !S.signer) return null;
+  const b = atob(S.sig.split(",")[1]); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u;
+}
+function sigDocx() {
+  const png = sigOctets(); if (!png) return null;
+  const dv = new DataView(png.buffer); return { png, w: dv.getUint32(16), h: dv.getUint32(20) };
+}
+const caseSigner = () => S.sig ? `<label class="check small"><input type="checkbox" id="signer" ${S.signer ? "checked" : ""}> Apposer ma signature (employeur)</label>` : "";
+function lierCaseSigner(apres) { const c = $("#signer"); if (c) c.onchange = (e) => { S.signer = e.target.checked; if (apres) apres(); }; }
+// Détourage d'une photo de signature : fond clair rendu transparent, encre bleu foncé
+function detourerSignature(file) {
+  return new Promise((ok, ko) => {
+    const img = new Image(); img.onerror = () => ko(new Error("image illisible"));
+    img.onload = () => {
+      const k = Math.min(1, 900 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      const g = c.getContext("2d"); g.drawImage(img, 0, 0, c.width, c.height);
+      const d = g.getImageData(0, 0, c.width, c.height), px = d.data;
+      let somme = 0; for (let i = 0; i < px.length; i += 4) somme += px[i] * 0.3 + px[i + 1] * 0.59 + px[i + 2] * 0.11;
+      const fond = somme / (px.length / 4);
+      let x0 = c.width, y0 = c.height, x1 = 0, y1 = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        const l = px[i] * 0.3 + px[i + 1] * 0.59 + px[i + 2] * 0.11, a = Math.max(0, Math.min(255, (fond - l - 30) * 4));
+        px[i] = 15; px[i + 1] = 20; px[i + 2] = 60; px[i + 3] = a;
+        if (a > 120) { const p = i / 4, x = p % c.width, y = (p / c.width) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      }
+      if (x1 <= x0) { ko(new Error("aucune signature détectée")); return; }
+      g.putImageData(d, 0, 0);
+      const m = 8, w = Math.min(c.width, x1 + m) - Math.max(0, x0 - m), h = Math.min(c.height, y1 + m) - Math.max(0, y0 - m);
+      const o = document.createElement("canvas"); const r = Math.min(1, 420 / w); o.width = Math.round(w * r); o.height = Math.round(h * r);
+      o.getContext("2d").drawImage(c, Math.max(0, x0 - m), Math.max(0, y0 - m), w, h, 0, 0, o.width, o.height);
+      ok(o.toDataURL("image/png"));
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+function blocSignature() {
+  return `<div class="panel" style="margin-top:12px"><h2>Ma signature</h2>
+    <p class="small muted" style="margin:0">Elle est apposée, si vous cochez « Apposer ma signature », dans le cadre employeur des contrats, avenants, certificats, soldes de tout compte et formulaires CAFAT que vous éditez. Elle n'est visible et utilisable que depuis votre propre compte : les autres gérants et les responsables n'y ont pas accès.</p>
+    ${S.sig ? `<div style="background:#fff;border:1px solid var(--line);border-radius:6px;padding:10px;width:max-content"><img src="${S.sig}" alt="Ma signature" style="height:70px;display:block"></div>` : `<p class="small" style="margin:0">Aucune signature enregistrée.</p>`}
+    <div class="row"><label class="small">${S.sig ? "Remplacer" : "Ajouter"} : photo de la signature sur papier blanc <input type="file" id="sigFic" accept="image/*"></label>${S.sig ? `<button id="sigSuppr">Supprimer ma signature</button>` : ""}</div></div>`;
+}
+function lierSignature() {
+  const f = $("#sigFic"); if (f) f.onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      const png = await detourerSignature(file);
+      const { error } = await S.sb.from("signatures").upsert({ user_id: S.profil.uid, png, maj_le: new Date().toISOString() });
+      if (error) throw error; S.sig = png; toast("Signature enregistrée."); render();
+    } catch (e2) { toast("Signature non enregistrée : " + (e2.message || e2)); }
+  };
+  const d = $("#sigSuppr"); if (d) d.onclick = async () => {
+    if (d.dataset.ok !== "1") { d.dataset.ok = "1"; d.textContent = "Confirmer la suppression ?"; return; }
+    const { error } = await S.sb.from("signatures").delete().eq("user_id", S.profil.uid);
+    if (error) { toast("Suppression impossible : " + error.message); return; } S.sig = null; toast("Signature supprimée."); render();
+  };
+}
 function renderEquipe(v) {
   const users = (S.users || []).slice().sort((a, b) => (a.nom || "").localeCompare(b.nom || ""));
   const sel = users.find((u) => u.uid === S.selUser);
@@ -1038,7 +1106,8 @@ function renderEquipe(v) {
       </form>
       ${sel.uid === S.profil.uid ? `<p class="small muted" style="margin:0">Vous ne pouvez pas modifier votre propre rôle.</p>` : `<p class="small muted" style="margin:0">Pour retirer l'accès à quelqu'un, passez son rôle à « Désactivé ».</p>`}` :
     `<div class="empty">Sélectionnez un compte, ou créez-en un pour un responsable.</div>`}
-    </div></div>`;
+    </div></div>${blocSignature()}`;
+  lierSignature();
   document.querySelectorAll("tr[data-uid]").forEach((tr) => (tr.onclick = () => { S.selUser = tr.dataset.uid; S.creerUser = false; S.nouveauCompte = null; render(); }));
   $("#addUser").onclick = () => { S.creerUser = true; S.nouveauCompte = null; render(); };
   if ($("#cancelUser")) $("#cancelUser").onclick = () => { S.creerUser = false; render(); };
@@ -1201,6 +1270,7 @@ async function demarrerSession(u) {
   }
   arreterAbonnements();
   S.profil = { uid: u.id, ...p.data() }; S.admin = S.profil.role === "admin";
+  chargerSignature();
   S.tab = S.admin ? (store.get("paie.tab") || "bulletins") : "saisie";
   $("#ctx").hidden = false; $("#tabs").hidden = false; $("#userbox").hidden = false;
   $("#who").textContent = `${S.profil.nom || u.email} · ${S.admin ? "Gérant" : "Responsable"}`;
