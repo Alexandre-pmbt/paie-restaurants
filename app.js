@@ -14,14 +14,14 @@ function defaultMois() { const d = new Date(); d.setDate(1); d.setMonth(d.getMon
 S.mois = store.get("paie.mois") || defaultMois();
 $("#selMois").value = S.mois;
 
-const TABS_ADMIN = [["rentab", "Rentabilité"], ["caisse", "Caisse & factures"], ["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
-const TABS_RESP = [["saisie", "Saisie du mois"], ["caisse", "Caisse & factures"]];
+const TABS_ADMIN = [["rentab", "Rentabilité"], ["caisse", "Caisse & factures"], ["archives", "Archives comptables"], ["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
+const TABS_RESP = [["saisie", "Saisie du mois"], ["caisse", "Caisse & factures"], ["archives", "Archives comptables"]];
 function renderTabs() {
   let tabs = S.admin ? TABS_ADMIN : TABS_RESP;
   const sd = typeof socDoc === "function" ? socDoc() : null;
-  if (sd && sd.horsPaie) { tabs = tabs.filter(([k]) => ["rentab", "caisse", "societe", "equipe"].includes(k)); if (!tabs.some(([k]) => k === S.tab)) S.tab = tabs[0][0]; }
+  if (sd && sd.horsPaie) { tabs = tabs.filter(([k]) => ["rentab", "caisse", "archives", "societe", "equipe"].includes(k)); if (!tabs.some(([k]) => k === S.tab)) S.tab = tabs[0][0]; }
   $("#tabs").innerHTML = tabs.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}</button>`).join("");
-  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; S.gest = { caisse: {}, charges: {}, charge: {} }; render(); renderTabs(); };
+  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; S.gest = { caisse: {}, charges: {}, charge: {} }; S.arch = null; render(); renderTabs(); };
 }
 
 const socDoc = () => S.socs.find((x) => x.id === S.soc);
@@ -158,6 +158,7 @@ function renderVue() {
   if (S.tab === "cafat") return renderCafat(v);
   if (S.tab === "caisse") return renderCaisse(v);
   if (S.tab === "rentab") return renderRentab(v);
+  if (S.tab === "archives") return renderArchivesCompta(v);
   if (S.tab === "equipe") return renderEquipe(v);
   if (S.tab === "societe") { renderSociete(v); ajouterOutilsSociete(v); return renderArchives(v); }
 }
@@ -1397,9 +1398,101 @@ function chargerGestion(soc, mois, force) {
 function chargesDuMois(soc, mois) {
   const deb = `${mois}-01`, fin = finMoisDe(mois);
   return (S.gest.charges[soc] || []).filter((c) => {
+    if (c.annulee) return false;
     if (catVariable(c.categorie)) return (c.date || "").slice(0, 7) === mois;
     return (c.periodeDebut || deb) <= fin && (c.periodeFin || fin) >= deb;
   });
+}
+
+/* ---------- Lecture automatique des factures (dans le navigateur : texte du PDF, sinon reconnaissance de caractères) ---------- */
+const chargerScript = (src, test) => test() ? Promise.resolve() : new Promise((ok, ko) => { const e = document.createElement("script"); e.src = src; e.onload = ok; e.onerror = () => ko(new Error("chargement impossible : " + src)); document.head.appendChild(e); });
+async function pdfjs() {
+  await chargerScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js", () => window.pdfjsLib);
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  return window.pdfjsLib;
+}
+async function ocr(image, etat) {
+  await chargerScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js", () => window.Tesseract);
+  const r = await window.Tesseract.recognize(image, "fra", { logger: (m) => m.status === "recognizing text" && etat && etat(`Lecture de l'image… ${Math.round(m.progress * 100)} %`) });
+  return r.data.text || "";
+}
+async function texteFacture(file, etat) {
+  if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+    const lib = await pdfjs(); const doc = await lib.getDocument({ data: await file.arrayBuffer() }).promise;
+    let txt = "";
+    for (let i = 1; i <= Math.min(doc.numPages, 4); i++) {
+      const pg = await doc.getPage(i), c = await pg.getTextContent();
+      let y = null; for (const it of c.items) { const yy = Math.round(it.transform[5]); txt += (y !== null && Math.abs(yy - y) > 3 ? "\n" : " ") + it.str; y = yy; }
+      txt += "\n";
+    }
+    if (txt.replace(/\s/g, "").length > 80) return { txt, mode: "texte du PDF" };
+    etat && etat("PDF scanné : lecture de l'image…");
+    const pg = await doc.getPage(1), vp = pg.getViewport({ scale: 2.2 }), cv = document.createElement("canvas");
+    cv.width = vp.width; cv.height = vp.height; await pg.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
+    return { txt: await ocr(cv, etat), mode: "lecture de l'image (PDF scanné)" };
+  }
+  return { txt: await ocr(file, etat), mode: "lecture de la photo" };
+}
+const MOIS_FR = { janvier: 1, fevrier: 2, février: 2, mars: 3, avril: 4, mai: 5, juin: 6, juillet: 7, aout: 8, août: 8, septembre: 9, octobre: 10, novembre: 11, decembre: 12, décembre: 12 };
+function montantsDe(ligne) {
+  // nombres au format calédonien : 12 345 / 12.345 / 12 345,00 / 12345 F
+  const out = [], re = /(\d{1,3}(?:[ .  ]\d{3})+|\d+)(?:,(\d{1,2}))?(?!\s*%)/g; let m;
+  while ((m = re.exec(ligne))) { const v = Number(m[1].replace(/[ .  ]/g, "")) + (m[2] ? Number("0." + m[2]) : 0); if (v >= 10) out.push(v); }
+  return out;
+}
+function dateDe(t) {
+  let m = t.match(/\b(\d{1,2})[\/.\-](\d{1,2})[\/.\-](20\d{2}|\d{2})\b/);
+  if (m) { const y = m[3].length === 2 ? "20" + m[3] : m[3]; if (+m[2] >= 1 && +m[2] <= 12 && +m[1] <= 31) return `${y}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`; }
+  m = t.toLowerCase().match(/\b(\d{1,2})(?:er)?\s+(janvier|f[ée]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre)\s+(20\d{2})/);
+  if (m) return `${m[3]}-${String(MOIS_FR[m[2].normalize("NFD").replace(/[̀-ͯ]/g, "")] || MOIS_FR[m[2]]).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  return null;
+}
+const MOTS_CAT = [
+  ["energie", /\b(eec|enercal|[ée]lectricit[ée]|kwh|calédonienne des eaux|\beau\b|consommation d'eau|gaz)\b/i],
+  ["telecom", /\b(opt|mobilis|lagoon|can'?l|internet|t[ée]l[ée]phon|abonnement|logiciel|licence|biborne|izipass|freebird)\b/i],
+  ["loyer", /\b(loyer|bail|charges locatives|quittance)\b/i],
+  ["assurance", /\b(assurance|axa|allianz|gan|generali|mma|prime d'assurance)\b/i],
+  ["redevance", /\b(redevance|royalt|franchise|marketing national|fonds publicitaire)\b/i],
+  ["banque", /\b(commission|frais bancaires|tpe|mon[ée]tique|bnc|bci|sgnc|bnp|banque)\b/i],
+  ["honoraires", /\b(honoraires|expert[- ]comptable|avocat|commissaire|proxima)\b/i],
+  ["entretien", /\b(entretien|r[ée]paration|maintenance|nettoyage|d[ée]pannage|intervention)\b/i],
+  ["emballages", /\b(emballage|barquette|gobelet|serviette|sac kraft|couvercle|paille|film alimentaire)\b/i],
+  ["impots", /\b(patente|imp[ôo]t|taxe|dsf)\b/i],
+  ["marchandises", /\b(viande|poulet|volaille|fromage|boisson|lait|farine|l[ée]gume|fruits?|surgel|sauce|cr[eè]me|caf[ée]|pain|frites|colis|kg)\b/i],
+];
+function analyserFacture(txt, historique) {
+  const lignes = txt.split(/\n+/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const res = { notes: [] }, low = txt.toLowerCase();
+  const chercher = (re) => { for (let i = lignes.length - 1; i >= 0; i--) if (re.test(lignes[i])) { const v = montantsDe(lignes[i]); if (v.length) return v[v.length - 1]; const n = lignes[i + 1] && montantsDe(lignes[i + 1]); if (n && n.length) return n[n.length - 1]; } return null; };
+  res.ttc = chercher(/(total|montant|net)\s*(g[ée]n[ée]ral\s*)?(ttc|[àa] payer|à r[ée]gler)|net [àa] payer|total ttc|montant d[ûu]/i);
+  res.ht = chercher(/(total|montant)\s*(net\s*)?h\.?\s?t\.?\b|hors\s*taxes?|total hors tgc|base h\.?t/i);
+  res.tgc = chercher(/\btgc\b(?!.*taux)|montant tgc|total tgc/i);
+  if (res.ttc && res.ht && res.ht > res.ttc) [res.ht, res.ttc] = [res.ttc, res.ht];
+  if (!res.ht && res.ttc && res.tgc && res.tgc < res.ttc) res.ht = Math.round(res.ttc - res.tgc);
+  if (!res.ttc && res.ht && res.tgc) res.ttc = Math.round(res.ht + res.tgc);
+  res.date = dateDe((txt.match(/(date\s*(de\s*)?(la\s*)?facture|facture du|date d'[ée]mission|du)\s*:?\s*[^\n]{0,30}/i) || [""])[0]) || dateDe(txt);
+  const num = txt.match(/facture\s*(n[°o]|num[ée]ro|#)\s*:?\s*([A-Z0-9\-\/]{3,})/i); if (num) res.numero = num[2];
+  const per = txt.match(/p[ée]riode\s*(du)?\s*:?\s*(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})\s*(au|[-–])\s*(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/i);
+  if (per) { res.periodeDebut = dateDe(per[2]); res.periodeFin = dateDe(per[4]); }
+  // Fournisseur : un fournisseur déjà connu cité dans la facture, sinon la première ligne « nom »
+  const connus = [...new Map(historique.filter((c) => c.fournisseur).map((c) => [c.fournisseur.toLowerCase(), c])).values()];
+  const deja = connus.find((c) => c.fournisseur.length > 2 && low.includes(c.fournisseur.toLowerCase()));
+  if (deja) { res.fournisseur = deja.fournisseur; res.categorie = deja.categorie; res.notes.push(`fournisseur reconnu : catégorie reprise de ses factures précédentes`); }
+  else {
+    const l = lignes.find((x) => /[a-zA-Z]{3}/.test(x) && !/factur|devis|date|page|client|n°|tel|t[ée]l\.|mail|www|bon de/i.test(x) && x.length <= 60);
+    if (l) res.fournisseur = l.replace(/[^\w\s&'.\-éèêàçôûî]/g, "").trim().slice(0, 50);
+    const cat = MOTS_CAT.find(([, re]) => re.test(txt)); if (cat) res.categorie = cat[0];
+  }
+  return res;
+}
+// Photo trop lourde : réduite avant archivage (lisible, 2 000 px maximum)
+async function compresserImage(file) {
+  if (!/^image\//.test(file.type) || file.size < 900000) return file;
+  const img = await createImageBitmap(file).catch(() => null); if (!img) return file;
+  const k = Math.min(1, 2000 / Math.max(img.width, img.height)), c = document.createElement("canvas");
+  c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  const blob = await new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.82));
+  return blob && blob.size < file.size ? new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : file;
 }
 
 /* ---------- Onglet « Caisse & factures » (gérant et responsables) ---------- */
@@ -1428,7 +1521,8 @@ function renderCaisse(v) {
   </div>
   <div class="panel"><h2>Déposer une facture</h2>
     <div class="form" id="facForm">
-      <label style="grid-column:1/-1">Fichier (PDF ou photo)<input type="file" id="fac_fic" accept="image/*,application/pdf"></label>
+      <label style="grid-column:1/-1">Fichier (PDF ou photo) : les cases se remplissent automatiquement<input type="file" id="fac_fic" accept="image/*,application/pdf"></label>
+      <div id="fac_etat" class="small" style="grid-column:1/-1" hidden></div>
       <label>Fournisseur<input id="fac_four" list="fac_fours"><datalist id="fac_fours">${[...new Set((S.gest.charges[S.soc] || []).map((c) => c.fournisseur).filter(Boolean))].map((f) => `<option value="${esc(f)}">`).join("")}</datalist></label>
       <label>Catégorie<select id="fac_cat">${CATEGORIES.map(([kk, l]) => `<option value="${kk}">${esc(l)}</option>`).join("")}</select></label>
       <label>Date de la facture<input id="fac_date" type="date" value="${auj.slice(0, 7) === S.mois ? auj : S.mois + "-01"}"></label>
@@ -1436,14 +1530,15 @@ function renderCaisse(v) {
       <label>Montant TTC (F)<input id="fac_ttc" inputmode="numeric"></label>
       <label>Période couverte : du<input id="fac_deb" type="date" value="${S.mois}-01"></label>
       <label>au<input id="fac_fin" type="date" value="${finMoisDe(S.mois)}"></label>
-      <label style="grid-column:1/-1">Note<input id="fac_note" placeholder="facultatif"></label>
+      <label>N° de facture<input id="fac_num" placeholder="facultatif"></label>
+      <label>Note<input id="fac_note" placeholder="facultatif"></label>
     </div>
     <p class="small muted" style="margin:0">Achats de marchandises et emballages : comptés au mois de la facture. Autres charges (loyer, électricité…) : réparties jour par jour sur la période couverte.</p>
-    <div class="row"><button class="primary" id="fac_ok">Enregistrer la facture</button></div>
+    <div class="row"><button class="primary" id="fac_ok">Enregistrer et archiver la facture</button></div>
     <h3>Factures prises en compte en ${esc(moisLib(S.mois).toLowerCase())} (${ch.length})</h3>
     <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Fournisseur</th><th>Catégorie</th><th class="num">HT</th><th></th></tr></thead><tbody>
     ${ch.map((c) => `<tr><td>${esc(frDate(c.date))}</td><td>${esc(c.fournisseur || "")}${c.note ? `<div class="small muted">${esc(c.note)}</div>` : ""}</td><td class="small">${esc(catLib(c.categorie))}${!catVariable(c.categorie) && c.periodeDebut ? `<div class="muted">${esc(frDate(c.periodeDebut))} → ${esc(frDate(c.periodeFin))}</div>` : ""}</td><td class="num">${F(num(c.ht))}</td>
-      <td class="row" style="gap:6px;flex-wrap:nowrap">${c.fichier ? `<button class="link" data-facv="${esc(c.fichier)}">Voir</button>` : ""}${S.admin ? `<button class="link" data-facx="${esc(c.id)}">Supprimer</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Aucune facture pour ce mois.</td></tr>`}
+      <td class="row" style="gap:6px;flex-wrap:nowrap">${c.fichier ? `<button class="link" data-facv="${esc(c.fichier)}">Voir</button>` : ""}${S.admin ? `<button class="link" data-facx="${esc(c.id)}" title="Retire la facture des calculs ; le fichier reste aux archives">Annuler</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Aucune facture pour ce mois.</td></tr>`}
     </tbody></table></div>
   </div></div>`;
   lierCaisse(v, k, cx, tgc);
@@ -1465,14 +1560,39 @@ function lierCaisse(v, k, cx, tgc) {
   ht.oninput = () => (ht.dataset.touche = "1");
   $("#fac_cat").onchange = (e) => { const variable = catVariable(e.target.value); $("#fac_deb").disabled = $("#fac_fin").disabled = variable; };
   $("#fac_cat").onchange({ target: $("#fac_cat") });
+  ["fac_four", "fac_date", "fac_ttc", "fac_num"].forEach((id) => $("#" + id).addEventListener("input", (e) => (e.target.dataset.touche = "1")));
+  $("#fac_cat").addEventListener("change", (e) => (e.target.dataset.touche = "1"));
+  $("#fac_fic").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const etat = $("#fac_etat"), dire = (t, cls = "") => { etat.hidden = false; etat.className = "small " + cls; etat.textContent = t; };
+    dire("Analyse de la facture…");
+    try {
+      const { txt, mode } = await texteFacture(f, dire);
+      const tousCharges = Object.values(S.gest.charges).flat();
+      const r = analyserFacture(txt, tousCharges);
+      const poser = (id, val) => { const el = $("#" + id); if (val != null && val !== "" && !el.dataset.touche) { el.value = val; el.classList.add("auto"); } };
+      poser("fac_four", r.fournisseur); poser("fac_date", r.date); poser("fac_num", r.numero);
+      if (r.ttc) poser("fac_ttc", Math.round(r.ttc));
+      if (r.ht && !ht.dataset.touche) { ht.value = Math.round(r.ht); ht.classList.add("auto"); }
+      else if (r.ttc && !ht.dataset.touche && tgc) { ht.value = Math.round(r.ttc / (1 + tgc / 100)); ht.classList.add("auto"); }
+      if (r.categorie && !$("#fac_cat").dataset.touche) { $("#fac_cat").value = r.categorie; $("#fac_cat").onchange({ target: $("#fac_cat") }); }
+      if (r.periodeDebut && r.periodeFin) { $("#fac_deb").value = r.periodeDebut; $("#fac_fin").value = r.periodeFin; }
+      else if (r.date && !catVariable($("#fac_cat").value)) { const m = r.date.slice(0, 7); $("#fac_deb").value = `${m}-01`; $("#fac_fin").value = finMoisDe(m); }
+      const trouves = [r.fournisseur && "fournisseur", r.date && "date", r.ht && "HT", r.ttc && "TTC", r.numero && "n°", r.categorie && "catégorie"].filter(Boolean);
+      dire(`Analyse terminée (${mode}) : ${trouves.length ? trouves.join(", ") + " trouvés" : "rien de lisible"}. Vérifiez les cases surlignées avant d'enregistrer.${r.notes.length ? " " + r.notes.join(" ; ") + "." : ""}`, trouves.length >= 3 ? "" : "warn");
+    } catch (err) { dire("Analyse impossible (" + (err.message || err) + ") : remplissez les cases à la main.", "warn"); }
+  };
   $("#fac_ok").onclick = async (e) => {
-    const b = e.target, f = $("#fac_fic").files[0];
+    const b = e.target; let f = $("#fac_fic").files[0];
     const c = { societe: S.soc, fournisseur: $("#fac_four").value.trim(), categorie: $("#fac_cat").value, date: $("#fac_date").value,
-      ht: num(ht.value), ttc: num(ttc.value) || null, note: $("#fac_note").value.trim(), par: S.profil.nom || "", le: new Date().toISOString() };
+      ht: num(ht.value), ttc: num(ttc.value) || null, numero: $("#fac_num").value.trim(), note: $("#fac_note").value.trim(), par: S.profil.nom || "", le: new Date().toISOString() };
     if (!catVariable(c.categorie)) { c.periodeDebut = $("#fac_deb").value || `${S.mois}-01`; c.periodeFin = $("#fac_fin").value || finMoisDe(S.mois); if (c.periodeFin < c.periodeDebut) { toast("La fin de période précède le début."); return; } }
     if (!c.date || !c.ht) { toast("Indiquez au moins la date et le montant HT."); return; }
+    const doublon = (S.gest.charges[S.soc] || []).find((x) => !x.annulee && x.fournisseur && x.fournisseur === c.fournisseur && ((c.numero && x.numero === c.numero) || (x.date === c.date && num(x.ht) === c.ht)));
+    if (doublon && b.dataset.ok !== "1") { b.dataset.ok = "1"; toast("Une facture identique (même fournisseur, même n° ou même date et montant) existe déjà. Cliquez à nouveau pour l'enregistrer quand même."); return; }
     b.disabled = true; b.textContent = "Enregistrement…";
     try {
+      if (f) f = await compresserImage(f);
       if (f) {
         const propre = f.name.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w.\-]+/g, "_").slice(-80);
         const chemin = `${S.soc}/${c.date.slice(0, 7)}/${Date.now()}-${propre}`;
@@ -1481,8 +1601,8 @@ function lierCaisse(v, k, cx, tgc) {
       }
       const r = await S.db.collection("charges").add(c);
       (S.gest.charges[S.soc] = S.gest.charges[S.soc] || []).push({ id: r.id, ...c });
-      toast("Facture enregistrée."); render();
-    } catch (e2) { toast("Enregistrement impossible : " + (e2.message || e2)); b.disabled = false; b.textContent = "Enregistrer la facture"; }
+      toast(c.fichier ? "Facture enregistrée et archivée." : "Facture enregistrée (sans fichier joint)."); render();
+    } catch (e2) { toast("Enregistrement impossible : " + (e2.message || e2)); b.disabled = false; b.textContent = "Enregistrer et archiver la facture"; }
   };
   v.querySelectorAll("[data-facv]").forEach((b) => (b.onclick = async () => {
     const w = window.open("", "_blank");
@@ -1494,11 +1614,82 @@ function lierCaisse(v, k, cx, tgc) {
     if (b.dataset.ok !== "1") { b.dataset.ok = "1"; b.textContent = "Confirmer ?"; return; }
     const c = (S.gest.charges[S.soc] || []).find((x) => x.id === b.dataset.facx); if (!c) return;
     try {
-      await S.db.doc(`charges/${c.id}`).delete();
-      if (c.fichier) await S.sb.storage.from("factures").remove([c.fichier]);
-      S.gest.charges[S.soc] = S.gest.charges[S.soc].filter((x) => x.id !== c.id); toast("Facture supprimée."); render();
-    } catch (e) { toast("Suppression impossible : " + (e.message || e.code)); }
+      const m = { annulee: true, annuleeLe: new Date().toISOString(), annuleePar: S.profil.nom || "" };
+      await S.db.doc(`charges/${c.id}`).update(m); Object.assign(c, m);
+      toast("Facture annulée : retirée des calculs, le fichier reste aux archives."); render();
+    } catch (e) { toast("Annulation impossible : " + (e.message || e.code)); }
   }));
+}
+
+/* ---------- Onglet « Archives comptables » : toutes les factures déposées, conservées 10 ans ---------- */
+S.arch = null; S.archF = null;
+function renderArchivesCompta(v) {
+  if (!S.arch) {
+    v.innerHTML = `<div class="panel"><p class="muted">Chargement des archives…</p></div>`;
+    S.arch = { charge: true };
+    S.db.collection("charges").get().then((q) => { S.arch = { liste: q.docs.map((d) => ({ id: d.id, ...d.data() })) }; if (S.tab === "archives") render(); })
+      .catch((e) => { S.arch = { erreur: e.message || String(e) }; if (S.tab === "archives") render(); });
+    return;
+  }
+  if (S.arch.charge) return;
+  if (S.arch.erreur) { v.innerHTML = `<div class="panel">Lecture impossible : ${esc(S.arch.erreur)}</div>`; return; }
+  const socs = S.socs.map((x) => x.id), nomSoc = (id) => { const x = S.socs.find((y) => y.id === id) || {}; return x.enseigne || ENSEIGNES[id] || x.nom || id; };
+  const annees = [...new Set(S.arch.liste.map((c) => (c.date || "").slice(0, 4)).filter(Boolean))].sort().reverse();
+  const F0 = S.archF || (S.archF = { soc: S.soc || "", annee: annees[0] || String(new Date().getFullYear()), mois: "", cat: "", txt: "", annulees: false });
+  const liste = S.arch.liste.filter((c) => socs.includes(c.societe) && (!F0.soc || c.societe === F0.soc) && (!F0.annee || (c.date || "").startsWith(F0.annee))
+    && (!F0.mois || (c.date || "").slice(5, 7) === F0.mois) && (!F0.cat || c.categorie === F0.cat) && (F0.annulees || !c.annulee)
+    && (!F0.txt || `${c.fournisseur} ${c.numero} ${c.note}`.toLowerCase().includes(F0.txt.toLowerCase())))
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const tot = liste.reduce((a, c) => { if (!c.annulee) { a.ht += num(c.ht); a.ttc += num(c.ttc); } return a; }, { ht: 0, ttc: 0 });
+  const sansFichier = liste.filter((c) => !c.fichier).length;
+  const opt = (val, lib, cur) => `<option value="${esc(val)}" ${val === cur ? "selected" : ""}>${esc(lib)}</option>`;
+  v.innerHTML = `<div class="panel"><div class="row"><h2 class="grow">Archives comptables</h2><button id="arZip">Télécharger les fichiers (ZIP)</button><button id="arXlsx">Export Excel</button></div>
+    <p class="small muted" style="margin:0">Toutes les factures déposées, avec leur fichier d'origine. Elles sont conservées au moins 10 ans (durée légale des pièces comptables) : aucun fichier ne peut être supprimé avant ce délai. Une facture annulée reste archivée.</p>
+    <div class="row" style="flex-wrap:wrap">
+      <select id="arSoc" aria-label="Restaurant">${S.admin || socs.length > 1 ? opt("", "Tous les restaurants", F0.soc) : ""}${S.socs.map((x) => opt(x.id, nomSoc(x.id), F0.soc)).join("")}</select>
+      <select id="arAn" aria-label="Année">${opt("", "Toutes les années", F0.annee)}${annees.map((a) => opt(a, a, F0.annee)).join("")}</select>
+      <select id="arMois" aria-label="Mois">${opt("", "Tous les mois", F0.mois)}${["01","02","03","04","05","06","07","08","09","10","11","12"].map((m) => opt(m, moisLib(`2000-${m}`).replace(/ 2000/, "").toLowerCase(), F0.mois)).join("")}</select>
+      <select id="arCat" aria-label="Catégorie">${opt("", "Toutes catégories", F0.cat)}${CATEGORIES.map(([k, l]) => opt(k, l, F0.cat)).join("")}</select>
+      <input id="arTxt" placeholder="Fournisseur, n°…" value="${esc(F0.txt)}" style="width:12em">
+      <label class="check small"><input type="checkbox" id="arAnn" ${F0.annulees ? "checked" : ""}> Afficher les annulées</label>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Restaurant</th><th>Fournisseur</th><th>N°</th><th>Catégorie</th><th class="num">HT</th><th class="num">TTC</th><th>Déposée par</th><th></th></tr></thead><tbody>
+    ${liste.map((c) => `<tr${c.annulee ? ' class="muted"' : ""}><td>${esc(frDate(c.date))}</td><td class="small">${esc(nomSoc(c.societe))}</td><td>${esc(c.fournisseur || "")}${c.annulee ? ' <span class="chip">annulée</span>' : ""}</td><td class="small">${esc(c.numero || "")}</td><td class="small">${esc(catLib(c.categorie))}</td><td class="num">${F(num(c.ht))}</td><td class="num">${c.ttc ? F(num(c.ttc)) : ""}</td><td class="small">${esc(c.par || "")}<div class="muted">${esc(frDate((c.le || "").slice(0, 10)))}</div></td><td>${c.fichier ? `<button class="link" data-arv="${esc(c.fichier)}">Ouvrir</button>` : '<span class="small muted">sans fichier</span>'}</td></tr>`).join("") || `<tr><td colspan="9" class="muted">Aucune facture pour ces critères.</td></tr>`}
+    <tr><td colspan="5"><b>Total (${liste.filter((c) => !c.annulee).length} facture(s))</b></td><td class="num"><b>${F(tot.ht)}</b></td><td class="num"><b>${F(tot.ttc)}</b></td><td colspan="2"></td></tr>
+    </tbody></table></div>
+    ${sansFichier ? `<p class="small muted" style="margin:0">${sansFichier} facture(s) sans fichier joint : pensez à les déposer pour votre comptable.</p>` : ""}
+  </div>`;
+  const maj = (k, val) => { F0[k] = val; render(); };
+  $("#arSoc").onchange = (e) => maj("soc", e.target.value); $("#arAn").onchange = (e) => maj("annee", e.target.value);
+  $("#arMois").onchange = (e) => maj("mois", e.target.value); $("#arCat").onchange = (e) => maj("cat", e.target.value);
+  $("#arAnn").onchange = (e) => maj("annulees", e.target.checked);
+  let tm; $("#arTxt").oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { maj("txt", e.target.value); const i = $("#arTxt"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 350); };
+  v.querySelectorAll("[data-arv]").forEach((b) => (b.onclick = async () => {
+    const w = window.open("", "_blank");
+    const { data, error } = await S.sb.storage.from("factures").createSignedUrl(b.dataset.arv, 120);
+    if (error) { if (w) w.close(); toast("Ouverture impossible : " + error.message); return; }
+    if (w) w.location = data.signedUrl; else location.assign(data.signedUrl);
+  }));
+  const titreSel = [F0.soc ? nomSoc(F0.soc) : "Tous", F0.annee || "toutes-annees", F0.mois].filter(Boolean).join("_");
+  $("#arXlsx").onclick = () => {
+    const rows = liste.map((c) => ({ Date: frDate(c.date), Restaurant: nomSoc(c.societe), Fournisseur: c.fournisseur || "", "N° facture": c.numero || "", Catégorie: catLib(c.categorie), "Montant HT": num(c.ht), "Montant TTC": c.ttc ? num(c.ttc) : "", "Période": c.periodeDebut ? `${frDate(c.periodeDebut)} - ${frDate(c.periodeFin)}` : "", Statut: c.annulee ? "Annulée" : "", "Déposée par": c.par || "", "Déposée le": frDate((c.le || "").slice(0, 10)), Fichier: c.fichier ? c.fichier.split("/").pop().replace(/^\d+-/, "") : "" }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Factures");
+    enregistrerFichier(nomFichier(`Factures_${titreSel}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+  };
+  $("#arZip").onclick = async (e) => {
+    const b = e.target, avec = liste.filter((c) => c.fichier); if (!avec.length) { toast("Aucun fichier à télécharger."); return; }
+    b.disabled = true; const z = new JSZip(); let n = 0;
+    try {
+      for (const c of avec) {
+        b.textContent = `Préparation ${++n}/${avec.length}…`;
+        const { data, error } = await S.sb.storage.from("factures").download(c.fichier); if (error) throw error;
+        const nomF = `${nomSoc(c.societe)}/${(c.date || "").slice(0, 7)}/${c.date || ""}_${(c.fournisseur || "facture").replace(/[^\w\-]+/g, "_")}_${c.fichier.split("/").pop().replace(/^\d+-/, "")}`;
+        z.file(nomF.normalize("NFD").replace(/[̀-ͯ]/g, ""), data);
+      }
+      await enregistrerFichier(nomFichier(`Factures_${titreSel}.zip`), await z.generateAsync({ type: "blob" }));
+    } catch (err) { toast("Téléchargement impossible : " + (err.message || err)); }
+    b.disabled = false; b.textContent = "Télécharger les fichiers (ZIP)";
+  };
 }
 
 /* ---------- Onglet « Rentabilité » (gérant) ---------- */

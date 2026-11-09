@@ -193,3 +193,13 @@ drop policy if exists factures_suppr on storage.objects;
 create policy factures_lecture on storage.objects for select to authenticated using (bucket_id='factures' and (public.is_admin() or public.is_resp((storage.foldername(name))[1])));
 create policy factures_depot on storage.objects for insert to authenticated with check (bucket_id='factures' and (public.is_admin() or public.is_resp((storage.foldername(name))[1])));
 create policy factures_suppr on storage.objects for delete to authenticated using (bucket_id='factures' and public.is_admin());
+
+-- ---------- Conservation des factures : 10 ans minimum (aucune suppression ni remplacement avant) ----------
+drop policy if exists factures_suppr on storage.objects;
+create policy factures_suppr on storage.objects for delete to authenticated using (bucket_id='factures' and public.is_admin() and created_at < now() - interval '10 years');
+drop policy if exists factures_conservation on storage.objects;
+create policy factures_conservation on storage.objects as restrictive for delete to authenticated using (bucket_id <> 'factures' or created_at < now() - interval '10 years');
+drop policy if exists factures_pas_de_remplacement on storage.objects;
+create policy factures_pas_de_remplacement on storage.objects as restrictive for update to authenticated using (bucket_id <> 'factures');
+drop policy if exists charges_conservation on public.docs;
+create policy charges_conservation on public.docs as restrictive for delete to authenticated using (collection <> 'charges' or coalesce((data->>'le')::timestamptz, now()) < now() - interval '10 years');
