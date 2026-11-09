@@ -1370,6 +1370,8 @@ const CATEGORIES = [
   ["honoraires", "Honoraires (comptable, juridique…)", "fixe"],
   ["banque", "Frais bancaires et monétique", "fixe"],
   ["interets", "Intérêts d'emprunt", "fixe"],
+  ["credit", "Traite de crédit (capital + intérêts)", "fixe"],
+  ["communication", "Communication et publicité", "fixe"],
   ["impots", "Impôts et taxes (patente…)", "fixe"],
   ["exterieur", "Personnel extérieur, prestataires", "fixe"],
   ["autres", "Autres charges", "fixe"],
@@ -1716,17 +1718,28 @@ function calculRentab(soc) {
     return d >= deb && d <= fin ? a + num(c.ht) / nbJours(deb, fin) : a;
   }, 0);
   const ms = masseSalariale(soc), persoJour = ms.total / n, redev = num(soc.redevancePct);
+  const recurrentes = (soc.chargesFixes || []).filter((x) => num(x.montant));
+  const recMois = recurrentes.reduce((a, x) => a + num(x.montant), 0), recJour = recMois / n;
   const lignes = jours.map((d) => {
     const c = ca(d), mat = c * tauxMat / 100, red = c * redev / 100, fx = fixeJour(d);
-    return { d, ca: c, mat, red, fx, perso: persoJour, res: c - mat - red - fx - persoJour, saisi: !!(cx.jours[d] && (cx.jours[d].ht || cx.jours[d].ttc)) };
+    return { d, ca: c, mat, red, fx, rec: recJour, perso: persoJour, res: c - mat - red - fx - recJour - persoJour, saisi: !!(cx.jours[d] && (cx.jours[d].ht || cx.jours[d].ttc)) };
   });
-  const t = lignes.reduce((a, l) => { for (const x of ["ca", "mat", "red", "fx", "perso", "res"]) a[x] += l[x]; return a; }, { ca: 0, mat: 0, red: 0, fx: 0, perso: 0, res: 0 });
+  const t = lignes.reduce((a, l) => { for (const x of ["ca", "mat", "red", "fx", "rec", "perso", "res"]) a[x] += l[x]; return a; }, { ca: 0, mat: 0, red: 0, fx: 0, rec: 0, perso: 0, res: 0 });
   const saisis = lignes.filter((l) => l.saisi), manquants = lignes.filter((l) => !l.saisi).map((l) => l.d);
   const projCA = saisis.length ? t.ca / saisis.length * n : 0;
-  const fixeMois = tous.reduce((a, d) => a + fixeJour(d), 0);
+  const fixeMois = tous.reduce((a, d) => a + fixeJour(d), 0) + recMois;
+  // Double compte possible : facture saisie dans une catégorie déjà couverte par une charge fixe récurrente
+  const doublons = [...new Set(ch.filter((c) => !catVariable(c.categorie) && recurrentes.some((x) => x.cat === c.categorie)).map((c) => catLib(c.categorie)))];
   const projRes = projCA - projCA * (tauxMat + redev) / 100 - fixeMois - ms.total;
-  return { lignes, t, tauxMat, reel, tauxTheo, achats, ms, redev, manquants, projCA, projRes, fixeMois, n, nbFactures: ch.length };
+  return { lignes, t, tauxMat, reel, tauxTheo, achats, ms, redev, manquants, projCA, projRes, fixeMois, n, nbFactures: ch.length, recurrentes, recMois, doublons };
 }
+function ligneCF(x, i) {
+  return `<tr><td><input class="cf-lib" value="${esc(x.lib || "")}" aria-label="Libellé" placeholder="ex. Loyer"></td>
+    <td><select class="cf-cat" aria-label="Catégorie">${CATEGORIES.filter(([k]) => !catVariable(k)).map(([k, l]) => `<option value="${k}" ${k === x.cat ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></td>
+    <td class="num"><input class="cf-mt" inputmode="numeric" value="${esc(x.montant ?? "")}" style="width:9em" aria-label="Montant mensuel"></td>
+    <td><button class="link cf-del" type="button">Retirer</button></td></tr>`;
+}
+function lierCF() { document.querySelectorAll(".cf-del").forEach((b) => (b.onclick = () => b.closest("tr").remove())); }
 function renderRentab(v) {
   const soc = socDoc(); if (!soc) { v.innerHTML = `<div class="panel empty">Choisissez un restaurant.</div>`; return; }
   const k = cle();
@@ -1752,11 +1765,13 @@ function renderRentab(v) {
       ${r.manquants.length ? `<li class="bad">CA non saisi pour ${r.manquants.length} jour(s) : ${r.manquants.slice(-6).map(frDate).join(", ")}${r.manquants.length > 6 ? "…" : ""} (onglet Caisse & factures).</li>` : ""}
       <li>Coût matière : ${r.reel ? `<b>réel ${r.tauxMat.toFixed(1).replace(".", ",")} %</b> (achats du mois ${F(Math.round(r.achats))} F HT / CA)` : `<b>théorique ${r.tauxTheo} %</b> du CA${r.achats ? ` (achats déjà saisis : ${F(Math.round(r.achats))} F HT ; le taux réel s'appliquera une fois le mois terminé)` : " (aucune facture de marchandises saisie)"}`}.</li>
       <li>Personnel : ${F(Math.round(r.ms.total))} F de coût employeur sur le mois (${esc(r.ms.source)}), soit ${F(Math.round(r.ms.total / r.n))} F par jour.</li>
-      <li>Charges fixes : ${r.nbFactures ? `${F(Math.round(r.fixeMois))} F HT sur le mois, réparties par jour` : "aucune facture saisie pour ce mois : le résultat est surestimé"}.${r.redev ? ` Redevance franchise : ${r.redev} % du CA.` : ""}</li>
+      <li>Charges fixes récurrentes : ${r.recurrentes.length ? r.recurrentes.map((x) => `${esc(x.lib)} ${F(num(x.montant))} F`).join(" · ") + ` = ${F(r.recMois)} F par mois, soit ${F(Math.round(r.recMois / r.n))} F par jour` : "aucune (à renseigner ci-dessous)"}.</li>
+      <li>Autres charges (factures) : ${r.nbFactures ? `${F(Math.round(r.fixeMois - r.recMois))} F HT sur le mois, réparties par jour` : "aucune facture saisie pour ce mois"}.${r.redev ? ` Redevance franchise : ${r.redev} % du CA.` : ""}</li>
+      ${r.doublons.length ? `<li class="bad">Attention, double compte possible : des factures « ${esc(r.doublons.join(", "))} » sont saisies alors que cette charge figure déjà dans les charges fixes récurrentes. Annulez la facture ou retirez la charge récurrente.</li>` : ""}
     </ul>
-    <div class="tbl-wrap"><table><thead><tr><th>Jour</th><th class="num">CA HT</th><th class="num">Matières</th>${r.redev ? `<th class="num">Redevance</th>` : ""}<th class="num">Personnel</th><th class="num">Charges fixes</th><th class="num">Résultat</th></tr></thead><tbody>
-    ${r.lignes.slice().reverse().map((l) => `<tr${l.saisi ? "" : ' class="muted"'}><td>${esc(frDate(l.d))}${l.saisi ? "" : ' <span class="chip">CA non saisi</span>'}</td><td class="num">${F(Math.round(l.ca))}</td><td class="num">${F(Math.round(l.mat))}</td>${r.redev ? `<td class="num">${F(Math.round(l.red))}</td>` : ""}<td class="num">${F(Math.round(l.perso))}</td><td class="num">${F(Math.round(l.fx))}</td><td class="num ${cls(l.res)}"><b>${F(Math.round(l.res))}</b></td></tr>`).join("")}
-    <tr><td><b>Total</b></td><td class="num"><b>${F(Math.round(t.ca))}</b></td><td class="num"><b>${F(Math.round(t.mat))}</b></td>${r.redev ? `<td class="num"><b>${F(Math.round(t.red))}</b></td>` : ""}<td class="num"><b>${F(Math.round(t.perso))}</b></td><td class="num"><b>${F(Math.round(t.fx))}</b></td><td class="num ${cls(t.res)}"><b>${F(Math.round(t.res))}</b></td></tr>
+    <div class="tbl-wrap"><table><thead><tr><th>Jour</th><th class="num">CA HT</th><th class="num">Matières</th>${r.redev ? `<th class="num">Redevance</th>` : ""}<th class="num">Personnel</th><th class="num">Charges fixes</th><th class="num">Autres charges</th><th class="num">Résultat</th></tr></thead><tbody>
+    ${r.lignes.slice().reverse().map((l) => `<tr${l.saisi ? "" : ' class="muted"'}><td>${esc(frDate(l.d))}${l.saisi ? "" : ' <span class="chip">CA non saisi</span>'}</td><td class="num">${F(Math.round(l.ca))}</td><td class="num">${F(Math.round(l.mat))}</td>${r.redev ? `<td class="num">${F(Math.round(l.red))}</td>` : ""}<td class="num">${F(Math.round(l.perso))}</td><td class="num">${F(Math.round(l.rec))}</td><td class="num">${F(Math.round(l.fx))}</td><td class="num ${cls(l.res)}"><b>${F(Math.round(l.res))}</b></td></tr>`).join("")}
+    <tr><td><b>Total</b></td><td class="num"><b>${F(Math.round(t.ca))}</b></td><td class="num"><b>${F(Math.round(t.mat))}</b></td>${r.redev ? `<td class="num"><b>${F(Math.round(t.red))}</b></td>` : ""}<td class="num"><b>${F(Math.round(t.perso))}</b></td><td class="num"><b>${F(Math.round(t.rec))}</b></td><td class="num"><b>${F(Math.round(t.fx))}</b></td><td class="num ${cls(t.res)}"><b>${F(Math.round(t.res))}</b></td></tr>
     </tbody></table></div>
   </div>
   <div class="panel"><h2>Paramètres de calcul · ${esc(soc.enseigne || ENSEIGNES[soc.id] || soc.nom)}</h2>
@@ -1767,11 +1782,19 @@ function renderRentab(v) {
       <label>Redevance franchise (% du CA HT)<input name="redevancePct" type="number" step="0.1" value="${esc(soc.redevancePct ?? "")}" placeholder="si non facturée à part"></label>
       <label>Coût du personnel mensuel (si hors logiciel de paie)<input name="masseManuelle" type="number" value="${esc(soc.masseManuelle ?? "")}" placeholder="${soc.horsPaie ? "obligatoire pour ce restaurant" : "laisser vide : repris de la paie"}"></label>
     </div>
+    <h3>Charges fixes récurrentes (montant mensuel)</h3>
+    <div class="tbl-wrap"><table id="cfTab"><thead><tr><th>Libellé</th><th>Catégorie</th><th class="num">Montant par mois (F)</th><th></th></tr></thead><tbody>
+    ${(soc.chargesFixes || []).map((x, i) => ligneCF(x, i)).join("")}
+    </tbody></table></div>
+    <div class="row"><button class="link" id="cfAdd">+ Ajouter une charge fixe</button><span class="small muted grow">Comptées chaque jour à raison de 1/30e environ (montant ÷ nombre de jours du mois). Ne saisissez pas en plus les factures correspondantes.</span></div>
     <div class="row"><button class="primary" id="rbSave">Enregistrer les paramètres</button><span class="small muted grow">Si la redevance est facturée chaque mois, saisissez plutôt la facture (catégorie « Redevances ») et laissez ce taux vide.</span></div>
   </div>`;
+  $("#cfAdd").onclick = () => { const tb = $("#cfTab tbody"); tb.insertAdjacentHTML("beforeend", ligneCF({ lib: "", cat: "autres", montant: "" }, tb.children.length)); lierCF(); };
+  lierCF();
   $("#rbSave").onclick = async () => {
     const f = $("#rbForm"), d = {};
     for (const el of f.querySelectorAll("input")) d[el.name] = el.type === "number" ? (el.value === "" ? null : Number(el.value)) : el.value.trim();
+    d.chargesFixes = [...document.querySelectorAll("#cfTab tbody tr")].map((tr) => ({ lib: tr.querySelector(".cf-lib").value.trim(), cat: tr.querySelector(".cf-cat").value, montant: num(tr.querySelector(".cf-mt").value) })).filter((x) => x.lib || x.montant);
     try { await S.db.doc("societes/" + S.soc).update(d); toast("Paramètres enregistrés."); }
     catch (e) { toast("Enregistrement refusé : " + (e.message || e.code)); }
   };
