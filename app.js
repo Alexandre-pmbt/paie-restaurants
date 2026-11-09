@@ -1406,6 +1406,19 @@ function chargesDuMois(soc, mois) {
   });
 }
 
+/* ---------- Montants lisibles : espace entre les milliers dans les cases de saisie (classe « mt ») ---------- */
+const fmtMt = (v) => { if (v === null || v === undefined || v === "") return ""; const n = num(v); if (!n && String(v).trim() !== "0") return ""; const [e, d] = String(Math.abs(n)).split("."); return (n < 0 ? "-" : "") + e.replace(/\B(?=(\d{3})+(?!\d))/g, " ") + (d ? "," + d : ""); };
+if (!window.__mtLie) {
+  window.__mtLie = true;
+  document.addEventListener("input", (e) => {
+    const i = e.target; if (!(i instanceof HTMLInputElement) || !i.classList.contains("mt")) return;
+    const pos = i.selectionStart ?? i.value.length, avant = i.value.slice(0, pos).replace(/[^\d,]/g, "").length;
+    const brut = i.value.replace(/[^\d,\-]/g, ""); if (brut === "" || brut === "-") return;
+    const v = fmtMt(brut.replace(",", ".")) + (brut.endsWith(",") ? "," : ""); if (v === i.value) return;
+    i.value = v; let k = 0, p = 0; while (p < v.length && k < avant) { if (/[\d,]/.test(v[p])) k++; p++; } i.setSelectionRange(p, p);
+  }, true);
+}
+
 /* ---------- Lecture automatique des factures (dans le navigateur : texte du PDF, sinon reconnaissance de caractères) ---------- */
 const chargerScript = (src, test) => test() ? Promise.resolve() : new Promise((ok, ko) => { const e = document.createElement("script"); e.src = src; e.onload = ok; e.onerror = () => ko(new Error("chargement impossible : " + src)); document.head.appendChild(e); });
 async function pdfjs() {
@@ -1514,9 +1527,9 @@ function renderCaisse(v) {
     <div class="tbl-wrap"><table><thead><tr><th>Jour</th><th class="num">CA TTC</th><th class="num">CA HT</th><th class="num">Tickets</th></tr></thead><tbody>
     ${jours.slice().reverse().map((d) => { const j = cx.jours[d] || {}; const w = jsem[new Date(d + "T12:00:00Z").getUTCDay()];
       return `<tr><td>${w} ${esc(frDate(d))}</td>
-        <td class="num"><input class="cx" data-d="${d}" data-f="ttc" inputmode="numeric" value="${esc(j.ttc ?? "")}" style="width:8em" aria-label="CA TTC du ${frDate(d)}"></td>
-        <td class="num"><input class="cx" data-d="${d}" data-f="ht" inputmode="numeric" value="${esc(j.ht ?? "")}" style="width:8em" aria-label="CA HT du ${frDate(d)}"></td>
-        <td class="num"><input class="cx" data-d="${d}" data-f="tickets" inputmode="numeric" value="${esc(j.tickets ?? "")}" style="width:5em" aria-label="Tickets du ${frDate(d)}"></td></tr>`; }).join("")}
+        <td class="num"><input class="cx mt" data-d="${d}" data-f="ttc" inputmode="numeric" value="${esc(fmtMt(j.ttc))}" style="width:8em" aria-label="CA TTC du ${frDate(d)}"></td>
+        <td class="num"><input class="cx mt" data-d="${d}" data-f="ht" inputmode="numeric" value="${esc(fmtMt(j.ht))}" style="width:8em" aria-label="CA HT du ${frDate(d)}"></td>
+        <td class="num"><input class="cx mt" data-d="${d}" data-f="tickets" inputmode="numeric" value="${esc(fmtMt(j.tickets))}" style="width:5em" aria-label="Tickets du ${frDate(d)}"></td></tr>`; }).join("")}
     <tr><td><b>Total du mois</b></td><td class="num"><b>${F(tot.ttc)}</b></td><td class="num"><b>${F(tot.ht)}</b></td><td class="num"><b>${F(tot.t)}</b></td></tr>
     </tbody></table></div>
     <p class="small muted" style="margin:0">Enregistrement automatique à chaque saisie.</p>
@@ -1528,8 +1541,8 @@ function renderCaisse(v) {
       <label>Fournisseur<input id="fac_four" list="fac_fours"><datalist id="fac_fours">${[...new Set((S.gest.charges[S.soc] || []).map((c) => c.fournisseur).filter(Boolean))].map((f) => `<option value="${esc(f)}">`).join("")}</datalist></label>
       <label>Catégorie<select id="fac_cat">${CATEGORIES.map(([kk, l]) => `<option value="${kk}">${esc(l)}</option>`).join("")}</select></label>
       <label>Date de la facture<input id="fac_date" type="date" value="${auj.slice(0, 7) === S.mois ? auj : S.mois + "-01"}"></label>
-      <label>Montant HT (F)<input id="fac_ht" inputmode="numeric"></label>
-      <label>Montant TTC (F)<input id="fac_ttc" inputmode="numeric"></label>
+      <label>Montant HT (F)<input id="fac_ht" class="mt" inputmode="numeric"></label>
+      <label>Montant TTC (F)<input id="fac_ttc" class="mt" inputmode="numeric"></label>
       <label>Période couverte : du<input id="fac_deb" type="date" value="${S.mois}-01"></label>
       <label>au<input id="fac_fin" type="date" value="${finMoisDe(S.mois)}"></label>
       <label>N° de facture<input id="fac_num" placeholder="facultatif"></label>
@@ -1550,7 +1563,7 @@ function lierCaisse(v, k, cx, tgc) {
   v.querySelectorAll(".cx").forEach((i) => (i.onchange = () => {
     const d = i.dataset.d, j = cx.jours[d] || (cx.jours[d] = {});
     j[i.dataset.f] = i.value === "" ? null : num(i.value);
-    if (i.dataset.f === "ttc" && j.ttc && !j.ht && tgc) { j.ht = Math.round(j.ttc / (1 + tgc / 100)); const h = v.querySelector(`.cx[data-d="${d}"][data-f="ht"]`); if (h) h.value = j.ht; }
+    if (i.dataset.f === "ttc" && j.ttc && !j.ht && tgc) { j.ht = Math.round(j.ttc / (1 + tgc / 100)); const h = v.querySelector(`.cx[data-d="${d}"][data-f="ht"]`); if (h) h.value = fmtMt(j.ht); }
     j.par = S.profil.nom || ""; j.le = new Date().toISOString();
     clearTimeout(tmr); tmr = setTimeout(async () => {
       try { await S.db.doc(`caisse/${k}`).set({ societe: S.soc, mois: S.mois, jours: cx.jours }); toast("Chiffre d'affaires enregistré."); }
@@ -1558,7 +1571,7 @@ function lierCaisse(v, k, cx, tgc) {
     }, 400);
   }));
   const ttc = $("#fac_ttc"), ht = $("#fac_ht");
-  ttc.oninput = () => { if (!ht.dataset.touche && tgc && ttc.value) ht.value = Math.round(num(ttc.value) / (1 + tgc / 100)); };
+  ttc.oninput = () => { if (!ht.dataset.touche && tgc && ttc.value) ht.value = fmtMt(Math.round(num(ttc.value) / (1 + tgc / 100))); };
   ht.oninput = () => (ht.dataset.touche = "1");
   $("#fac_cat").onchange = (e) => { const variable = catVariable(e.target.value); $("#fac_deb").disabled = $("#fac_fin").disabled = variable; };
   $("#fac_cat").onchange({ target: $("#fac_cat") });
@@ -1574,9 +1587,9 @@ function lierCaisse(v, k, cx, tgc) {
       const r = analyserFacture(txt, tousCharges);
       const poser = (id, val) => { const el = $("#" + id); if (val != null && val !== "" && !el.dataset.touche) { el.value = val; el.classList.add("auto"); } };
       poser("fac_four", r.fournisseur); poser("fac_date", r.date); poser("fac_num", r.numero);
-      if (r.ttc) poser("fac_ttc", Math.round(r.ttc));
-      if (r.ht && !ht.dataset.touche) { ht.value = Math.round(r.ht); ht.classList.add("auto"); }
-      else if (r.ttc && !ht.dataset.touche && tgc) { ht.value = Math.round(r.ttc / (1 + tgc / 100)); ht.classList.add("auto"); }
+      if (r.ttc) poser("fac_ttc", fmtMt(Math.round(r.ttc)));
+      if (r.ht && !ht.dataset.touche) { ht.value = fmtMt(Math.round(r.ht)); ht.classList.add("auto"); }
+      else if (r.ttc && !ht.dataset.touche && tgc) { ht.value = fmtMt(Math.round(r.ttc / (1 + tgc / 100))); ht.classList.add("auto"); }
       if (r.categorie && !$("#fac_cat").dataset.touche) { $("#fac_cat").value = r.categorie; $("#fac_cat").onchange({ target: $("#fac_cat") }); }
       if (r.periodeDebut && r.periodeFin) { $("#fac_deb").value = r.periodeDebut; $("#fac_fin").value = r.periodeFin; }
       else if (r.date && !catVariable($("#fac_cat").value)) { const m = r.date.slice(0, 7); $("#fac_deb").value = `${m}-01`; $("#fac_fin").value = finMoisDe(m); }
@@ -1736,7 +1749,7 @@ function calculRentab(soc) {
 function ligneCF(x, i) {
   return `<tr><td><input class="cf-lib" value="${esc(x.lib || "")}" aria-label="Libellé" placeholder="ex. Loyer"></td>
     <td><select class="cf-cat" aria-label="Catégorie">${CATEGORIES.filter(([k]) => !catVariable(k)).map(([k, l]) => `<option value="${k}" ${k === x.cat ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></td>
-    <td class="num"><input class="cf-mt" inputmode="numeric" value="${esc(x.montant ?? "")}" style="width:9em" aria-label="Montant mensuel"></td>
+    <td class="num"><input class="cf-mt mt" inputmode="numeric" value="${esc(fmtMt(x.montant))}" style="width:9em" aria-label="Montant mensuel"></td>
     <td><button class="link cf-del" type="button">Retirer</button></td></tr>`;
 }
 function lierCF() { document.querySelectorAll(".cf-del").forEach((b) => (b.onclick = () => b.closest("tr").remove())); }
@@ -1780,7 +1793,7 @@ function renderRentab(v) {
       <label>Taux de TGC sur les ventes (%)<input name="tauxTGC" type="number" step="0.1" value="${esc(soc.tauxTGC ?? "")}" placeholder="à vérifier avec votre comptable"></label>
       <label>Coût matière théorique (% du CA HT)<input name="tauxMatiere" type="number" step="0.1" value="${esc(soc.tauxMatiere ?? 30)}"></label>
       <label>Redevance franchise (% du CA HT)<input name="redevancePct" type="number" step="0.1" value="${esc(soc.redevancePct ?? "")}" placeholder="si non facturée à part"></label>
-      <label>Coût du personnel mensuel (si hors logiciel de paie)<input name="masseManuelle" type="number" value="${esc(soc.masseManuelle ?? "")}" placeholder="${soc.horsPaie ? "obligatoire pour ce restaurant" : "laisser vide : repris de la paie"}"></label>
+      <label>Coût du personnel mensuel (si hors logiciel de paie)<input name="masseManuelle" class="mt" data-num="1" inputmode="numeric" value="${esc(fmtMt(soc.masseManuelle))}" placeholder="${soc.horsPaie ? "obligatoire pour ce restaurant" : "laisser vide : repris de la paie"}"></label>
     </div>
     <h3>Charges fixes récurrentes (montant mensuel)</h3>
     <div class="tbl-wrap"><table id="cfTab"><thead><tr><th>Libellé</th><th>Catégorie</th><th class="num">Montant par mois (F)</th><th></th></tr></thead><tbody>
@@ -1793,7 +1806,7 @@ function renderRentab(v) {
   lierCF();
   $("#rbSave").onclick = async () => {
     const f = $("#rbForm"), d = {};
-    for (const el of f.querySelectorAll("input")) d[el.name] = el.type === "number" ? (el.value === "" ? null : Number(el.value)) : el.value.trim();
+    for (const el of f.querySelectorAll("input")) d[el.name] = el.type === "number" || el.dataset.num ? (el.value === "" ? null : num(el.value)) : el.value.trim();
     d.chargesFixes = [...document.querySelectorAll("#cfTab tbody tr")].map((tr) => ({ lib: tr.querySelector(".cf-lib").value.trim(), cat: tr.querySelector(".cf-cat").value, montant: num(tr.querySelector(".cf-mt").value) })).filter((x) => x.lib || x.montant);
     try { await S.db.doc("societes/" + S.soc).update(d); toast("Paramètres enregistrés."); }
     catch (e) { toast("Enregistrement refusé : " + (e.message || e.code)); }
