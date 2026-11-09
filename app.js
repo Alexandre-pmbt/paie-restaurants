@@ -14,12 +14,12 @@ function defaultMois() { const d = new Date(); d.setDate(1); d.setMonth(d.getMon
 S.mois = store.get("paie.mois") || defaultMois();
 $("#selMois").value = S.mois;
 
-const TABS_ADMIN = [["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
-const TABS_RESP = [["saisie", "Saisie du mois"]];
+const TABS_ADMIN = [["rentab", "Rentabilité"], ["caisse", "Caisse & factures"], ["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
+const TABS_RESP = [["saisie", "Saisie du mois"], ["caisse", "Caisse & factures"]];
 function renderTabs() {
   const tabs = S.admin ? TABS_ADMIN : TABS_RESP;
   $("#tabs").innerHTML = tabs.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}</button>`).join("");
-  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; render(); renderTabs(); };
+  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; S.gest = { caisse: {}, charges: {}, charge: {} }; render(); renderTabs(); };
 }
 
 const socDoc = () => S.socs.find((x) => x.id === S.soc);
@@ -131,6 +131,8 @@ function renderVue() {
   if (S.tab === "salaries") return renderSalaries(v);
   if (S.tab === "contrats") return renderContrats(v);
   if (S.tab === "cafat") return renderCafat(v);
+  if (S.tab === "caisse") return renderCaisse(v);
+  if (S.tab === "rentab") return renderRentab(v);
   if (S.tab === "equipe") return renderEquipe(v);
   if (S.tab === "societe") { renderSociete(v); ajouterOutilsSociete(v); return renderArchives(v); }
 }

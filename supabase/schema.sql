@@ -179,3 +179,17 @@ create policy sig_modif on public.signatures for update to authenticated using (
 create policy sig_suppr on public.signatures for delete to authenticated using (user_id = auth.uid());
 revoke all on public.signatures from anon;
 grant select, insert, update, delete on public.signatures to authenticated;
+
+-- ---------- Gestion : chiffre d'affaires journalier (caisse) et factures de charges ----------
+alter table public.docs drop constraint if exists docs_collection_check;
+alter table public.docs add constraint docs_collection_check check (collection in ('societes','salaries','saisies','ajustements','clotures','documents','caisse','charges'));
+-- (les politiques docs_lecture / docs_creation / docs_modif ont été étendues : les responsables lisent et saisissent
+--  la caisse et déposent des factures pour leurs restaurants ; seul le gérant modifie ou supprime une facture)
+insert into storage.buckets (id, name, public, file_size_limit) values ('factures','factures',false,20971520)
+on conflict (id) do update set public=false, file_size_limit=excluded.file_size_limit;
+drop policy if exists factures_lecture on storage.objects;
+drop policy if exists factures_depot on storage.objects;
+drop policy if exists factures_suppr on storage.objects;
+create policy factures_lecture on storage.objects for select to authenticated using (bucket_id='factures' and (public.is_admin() or public.is_resp((storage.foldername(name))[1])));
+create policy factures_depot on storage.objects for insert to authenticated with check (bucket_id='factures' and (public.is_admin() or public.is_resp((storage.foldername(name))[1])));
+create policy factures_suppr on storage.objects for delete to authenticated using (bucket_id='factures' and public.is_admin());
