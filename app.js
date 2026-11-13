@@ -14,14 +14,14 @@ function defaultMois() { const d = new Date(); d.setDate(1); d.setMonth(d.getMon
 S.mois = store.get("paie.mois") || defaultMois();
 $("#selMois").value = S.mois;
 
-const TABS_ADMIN = [["rentab", "Rentabilité"], ["caisse", "Caisse & factures"], ["archives", "Archives comptables"], ["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
-const TABS_RESP = [["saisie", "Saisie du mois"], ["caisse", "Caisse & factures"], ["archives", "Archives comptables"]];
+const TABS_ADMIN = [["rentab", "Rentabilité"], ["caisse", "Caisse & factures"], ["stock", "Stock"], ["archives", "Archives comptables"], ["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
+const TABS_RESP = [["saisie", "Saisie du mois"], ["caisse", "Caisse & factures"], ["stock", "Stock"], ["archives", "Archives comptables"]];
 function renderTabs() {
   let tabs = S.admin ? TABS_ADMIN : TABS_RESP;
   const sd = typeof socDoc === "function" ? socDoc() : null;
-  if (sd && sd.horsPaie) { tabs = tabs.filter(([k]) => ["rentab", "caisse", "archives", "societe", "equipe"].includes(k)); if (!tabs.some(([k]) => k === S.tab)) S.tab = tabs[0][0]; }
+  if (sd && sd.horsPaie) { tabs = tabs.filter(([k]) => ["rentab", "caisse", "stock", "archives", "societe", "equipe"].includes(k)); if (!tabs.some(([k]) => k === S.tab)) S.tab = tabs[0][0]; }
   $("#tabs").innerHTML = tabs.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}</button>`).join("");
-  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; S.gest = { caisse: {}, charges: {}, charge: {} }; S.arch = null; render(); renderTabs(); };
+  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; S.gest = { caisse: {}, charges: {}, charge: {} }; S.arch = null; S.stk = null; render(); renderTabs(); };
 }
 
 const socDoc = () => S.socs.find((x) => x.id === S.soc);
@@ -151,6 +151,9 @@ function renderVue() {
   if (S.admin && S.tab === "equipe") return renderEquipe(v);
   if (!S.socs.length) { if (S.admin) return renderDemarrage(v); v.innerHTML = `<div class="empty">Aucune société ne vous est attribuée pour l'instant. Demandez au gérant de vous donner accès.</div>`; return; }
   if (S.tab === "saisie") return renderSaisie(v);
+  if (S.tab === "caisse") return renderCaisse(v);
+  if (S.tab === "stock") return renderStock(v);
+  if (S.tab === "archives") return renderArchivesCompta(v);
   if (!S.admin) return renderSaisie(v);
   if (S.tab === "bulletins") return renderBulletins(v);
   if (S.tab === "salaries") return renderSalaries(v);
@@ -1810,6 +1813,221 @@ function renderRentab(v) {
     d.chargesFixes = [...document.querySelectorAll("#cfTab tbody tr")].map((tr) => ({ lib: tr.querySelector(".cf-lib").value.trim(), cat: tr.querySelector(".cf-cat").value, montant: num(tr.querySelector(".cf-mt").value) })).filter((x) => x.lib || x.montant);
     try { await S.db.doc("societes/" + S.soc).update(d); toast("Paramètres enregistrés."); }
     catch (e) { toast("Enregistrement refusé : " + (e.message || e.code)); }
+  };
+}
+
+/* ---------- Stock : inventaire quotidien, réceptions, seuils, catalogue par restaurant ---------- */
+const EUR_XPF = 119.332;
+const qte = (v) => { const x = Math.round(num(v) * 100) / 100; return String(x).replace(".", ","); };
+S.stk = null; S.stkVue = "inv"; S.stkDate = null; S.stkF = { txt: "", alerte: false };
+function chargerStock(force) {
+  if (!force && S.stk && S.stk.soc === S.soc) return;
+  const soc = S.soc; S.stk = { soc, charge: true };
+  S.db.collection("stock").where("societe", "==", soc).get().then((q) => {
+    const docs = q.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const cat = docs.find((d) => d.id === `${soc}_cat`) || { societe: soc, produits: [] };
+    const invs = {}; docs.filter((d) => d.date).forEach((d) => (invs[d.date] = d));
+    S.stk = { soc, cat, invs, edit: {} };
+    if (S.tab === "stock") render();
+  }).catch((e) => { S.stk = { soc, erreur: e.message || String(e) }; if (S.tab === "stock") render(); });
+}
+const prixUnite = (p) => num(p.prixCond) / (num(p.parCond) || 1);
+/* Dernier stock compté strictement avant la date, par produit */
+function stockAvant(date) {
+  const res = {}; const dates = Object.keys(S.stk.invs).filter((d) => d < date).sort();
+  dates.forEach((d) => { const c = S.stk.invs[d].comptes || {}; Object.keys(c).forEach((k) => { if (c[k] !== "" && c[k] != null) res[k] = { q: num(c[k]), d }; }); });
+  return res;
+}
+function etatStock(p, compte) {
+  const min = num(p.min);
+  if (compte === null) return { cls: "", lib: "—", cmd: 0 };
+  const cmd = min ? Math.max(0, Math.ceil((min * 2 - compte) / (num(p.parCond) || 1))) : 0;
+  if (compte <= 0) return { cls: "bad", lib: "Rupture", cmd: cmd || 1 };
+  if (min && compte < min) return { cls: "warn", lib: "Sous le seuil", cmd };
+  return { cls: "ok", lib: "OK", cmd: 0 };
+}
+function lignesStock(date) {
+  const inv = S.stk.invs[date] || {}, ed = S.stk.edit, av = stockAvant(date);
+  return (S.stk.cat.produits || []).map((p) => {
+    const cS = ed["c_" + p.id] !== undefined ? ed["c_" + p.id] : (inv.comptes || {})[p.id];
+    const eS = ed["e_" + p.id] !== undefined ? ed["e_" + p.id] : (inv.entrees || {})[p.id];
+    const compte = cS === undefined || cS === "" || cS === null ? null : num(cS);
+    const entrees = num(eS) * (num(p.parCond) || 1), prec = av[p.id] ? av[p.id].q : null;
+    const conso = compte !== null && prec !== null ? prec + entrees - compte : null;
+    const ref = compte !== null ? compte : prec !== null ? prec + entrees : null;
+    return { p, cS: cS ?? "", eS: eS ?? "", compte, entrees, prec, precDate: av[p.id] && av[p.id].d, conso, ref, valeur: ref !== null ? ref * prixUnite(p) : 0, etat: etatStock(p, ref) };
+  });
+}
+function renderStock(v) {
+  chargerStock();
+  if (!S.stk || S.stk.charge) { v.innerHTML = `<div class="panel"><p class="muted">Chargement du stock…</p></div>`; return; }
+  if (S.stk.erreur) { v.innerHTML = `<div class="panel">Lecture impossible : ${esc(S.stk.erreur)}</div>`; return; }
+  const nom = (socDoc() || {}).enseigne || ENSEIGNES[S.soc] || S.soc;
+  const tabs = `<div class="row" style="gap:6px"><button class="${S.stkVue === "inv" ? "primary" : ""}" data-sv="inv">Inventaire du jour</button><button class="${S.stkVue === "cat" ? "primary" : ""}" data-sv="cat">Produits & seuils</button><button class="${S.stkVue === "hist" ? "primary" : ""}" data-sv="hist">Historique</button></div>`;
+  const lier = () => v.querySelectorAll("[data-sv]").forEach((b) => (b.onclick = () => { S.stkVue = b.dataset.sv; render(); }));
+  if (!(S.stk.cat.produits || []).length && S.stkVue !== "cat") S.stkVue = "cat";
+  if (S.stkVue === "cat") { renderStockCatalogue(v, nom, tabs); lier(); return; }
+  if (S.stkVue === "hist") { renderStockHist(v, nom, tabs); lier(); return; }
+  const date = S.stkDate || (S.stkDate = jourLocal());
+  const L = lignesStock(date), F0 = S.stkF;
+  const valeur = L.reduce((a, l) => a + l.valeur, 0), alertes = L.filter((l) => l.etat.cls === "bad" || l.etat.cls === "warn");
+  const consoVal = L.reduce((a, l) => a + (l.conso > 0 ? l.conso * prixUnite(l.p) : 0), 0), comptes = L.filter((l) => l.compte !== null).length;
+  const recVal = L.reduce((a, l) => a + l.entrees * prixUnite(l.p), 0);
+  const vis = L.filter((l) => (!F0.alerte || l.etat.cls === "bad" || l.etat.cls === "warn") && (!F0.txt || `${l.p.lib} ${l.p.code} ${l.p.fourn} ${l.p.cat}`.toLowerCase().includes(F0.txt.toLowerCase())));
+  const cats = [...new Set(vis.map((l) => l.p.cat || "Divers"))];
+  const sale = Object.keys(S.stk.edit).length > 0, deja = !!S.stk.invs[date];
+  v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Stock — ${esc(nom)}</h2>${tabs}</div>
+    <div class="row" style="flex-wrap:wrap">
+      <label class="small">Date <input type="date" id="stDate" value="${date}"></label>
+      <button id="stPrev" title="Jour précédent">◀</button><button id="stNext" title="Jour suivant">▶</button>
+      <input id="stTxt" placeholder="Rechercher un produit…" value="${esc(F0.txt)}" style="width:14em">
+      <label class="check small"><input type="checkbox" id="stAl" ${F0.alerte ? "checked" : ""}> Seulement les alertes</label>
+      <span class="grow"></span>
+      <button id="stCmd" ${alertes.length ? "" : "disabled"}>Bon de commande (Excel)</button><button id="stXlsx">Export Excel</button>
+      <button class="primary" id="stSave">${sale ? "Enregistrer l'inventaire" : deja ? "Inventaire enregistré ✓" : "Enregistrer l'inventaire"}</button>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><b>${F(Math.round(valeur))}</b><span>Valeur du stock (F HT)</span></div>
+      <div class="kpi"><b class="${alertes.length ? "neg" : "pos"}">${alertes.length}</b><span>Produit(s) en rupture ou sous le seuil</span></div>
+      <div class="kpi"><b>${F(Math.round(consoVal))}</b><span>Consommation du jour (F HT)</span></div>
+      <div class="kpi"><b>${F(Math.round(recVal))}</b><span>Réceptions du jour (F HT)</span></div>
+      <div class="kpi"><b>${comptes} / ${L.length}</b><span>Produits comptés ce jour</span></div>
+    </div>
+    <p class="small muted" style="margin:0">Chaque jour : saisissez les <b>réceptions</b> (en colis livrés) et le <b>stock compté</b> en fin de service (dans l'unité indiquée). La consommation = stock précédent + réceptions − stock compté. Un produit non compté reprend le dernier stock connu.</p>
+    <div class="tbl-wrap"><table class="stk"><thead><tr><th>Produit</th><th>Unité</th><th class="num">Stock préc.</th><th class="num">Réception (colis)</th><th class="num">Stock compté</th><th class="num">Conso</th><th class="num">Valeur</th><th>État</th></tr></thead><tbody>
+    ${cats.map((c) => `<tr><td colspan="8" style="background:var(--soft)"><b>${esc(c)}</b></td></tr>` + vis.filter((l) => (l.p.cat || "Divers") === c).map((l) => `<tr>
+      <td>${esc(l.p.lib)}<div class="small muted">${esc(l.p.fourn || "")}${l.p.code ? " · " + esc(l.p.code) : ""}</div></td>
+      <td class="small">${esc(l.p.unite || "unité")}${num(l.p.parCond) > 1 ? `<div class="muted">colis = ${qte(l.p.parCond)}</div>` : ""}</td>
+      <td class="num">${l.prec !== null ? qte(l.prec) : "—"}${l.precDate ? `<div class="small muted">${esc(frDate(l.precDate).slice(0, 5))}</div>` : ""}</td>
+      <td class="num"><input inputmode="decimal" data-e="${esc(l.p.id)}" value="${esc(String(l.eS).replace(".", ","))}" style="width:5em;text-align:right" aria-label="Réception ${esc(l.p.lib)}"></td>
+      <td class="num"><input inputmode="decimal" data-c="${esc(l.p.id)}" value="${esc(String(l.cS).replace(".", ","))}" style="width:6em;text-align:right" aria-label="Stock compté ${esc(l.p.lib)}"></td>
+      <td class="num${l.conso < 0 ? " neg" : ""}">${l.conso !== null ? qte(l.conso) : ""}</td>
+      <td class="num">${l.ref !== null ? F(Math.round(l.valeur)) : ""}</td>
+      <td>${l.etat.cls ? `<span class="chip ${l.etat.cls}">${l.etat.lib}</span>` : '<span class="small muted">non compté</span>'}${l.etat.cmd ? `<div class="small muted">commander ${l.etat.cmd} colis</div>` : ""}</td></tr>`).join("")).join("") || `<tr><td colspan="8" class="muted">Aucun produit pour ces critères.</td></tr>`}
+    </tbody></table></div>
+    ${L.some((l) => l.conso < 0) ? `<p class="small" style="margin:0;color:var(--bad)">Une consommation négative signale un stock compté supérieur au stock attendu : réception oubliée ou erreur de comptage.</p>` : ""}
+  </div>`;
+  lier();
+  const allerA = (d) => { if (Object.keys(S.stk.edit).length && !confirm("Des saisies ne sont pas enregistrées. Changer de jour quand même ?")) return; S.stk.edit = {}; S.stkDate = d; render(); };
+  $("#stDate").onchange = (e) => e.target.value && allerA(e.target.value);
+  const decal = (n) => { const d = new Date(date + "T12:00:00"); d.setDate(d.getDate() + n); allerA(jourLocal(d)); };
+  $("#stPrev").onclick = () => decal(-1); $("#stNext").onclick = () => decal(1);
+  $("#stAl").onchange = (e) => { F0.alerte = e.target.checked; render(); };
+  let tm; $("#stTxt").oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { F0.txt = e.target.value; render(); const i = $("#stTxt"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 350); };
+  v.querySelectorAll("[data-c],[data-e]").forEach((i) => {
+    i.onchange = () => { const k = i.dataset.c ? "c_" + i.dataset.c : "e_" + i.dataset.e; S.stk.edit[k] = i.value.trim() === "" ? "" : num(i.value); const y = window.scrollY, id = k; render(); window.scrollTo(0, y); const n = v.querySelector(`[data-${id[0]}="${CSS.escape(id.slice(2))}"]`); const all = [...v.querySelectorAll("[data-c],[data-e]")]; const nx = all[all.indexOf(n) + 1]; if (nx) nx.focus(); };
+    i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); i.blur(); } };
+  });
+  $("#stSave").onclick = async () => {
+    const inv = S.stk.invs[date] || {}, comptes = { ...(inv.comptes || {}) }, entrees = { ...(inv.entrees || {}) };
+    Object.entries(S.stk.edit).forEach(([k, val]) => { const t = k[0] === "c" ? comptes : entrees, id = k.slice(2); if (val === "") delete t[id]; else t[id] = val; });
+    const doc = { societe: S.soc, date, comptes, entrees, par: (S.profil && S.profil.nom) || "", le: new Date().toISOString() };
+    try { await S.db.doc(`stock/${S.soc}_${date}`).set(doc); S.stk.invs[date] = { id: `${S.soc}_${date}`, ...doc }; S.stk.edit = {}; toast(`Inventaire du ${frDate(date)} enregistré.`); render(); }
+    catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
+  };
+  $("#stXlsx").onclick = () => {
+    const rows = L.map((l) => ({ Catégorie: l.p.cat, Produit: l.p.lib, Fournisseur: l.p.fourn || "", Code: l.p.code || "", Unité: l.p.unite, "Stock précédent": l.prec ?? "", "Réception (unités)": l.entrees || "", "Stock compté": l.compte ?? "", Consommation: l.conso ?? "", "Prix unitaire HT": Math.round(prixUnite(l.p)), "Valeur HT": Math.round(l.valeur), Seuil: num(l.p.min) || "", État: l.etat.lib }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Stock " + frDate(date).replace(/\//g, "-"));
+    enregistrerFichier(nomFichier(`Stock_${nom}_${date}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+  };
+  $("#stCmd").onclick = () => {
+    const rows = alertes.filter((l) => l.etat.cmd).sort((a, b) => (a.p.fourn || "").localeCompare(b.p.fourn || "") || a.p.lib.localeCompare(b.p.lib))
+      .map((l) => ({ Fournisseur: l.p.fourn || "", Code: l.p.code || "", Produit: l.p.lib, Conditionnement: l.p.cond || "", "Stock actuel": l.ref, Seuil: num(l.p.min), "Colis à commander": l.etat.cmd, "Prix colis HT": num(l.p.prixCond), "Total HT": l.etat.cmd * num(l.p.prixCond) }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Commande");
+    enregistrerFichier(nomFichier(`Commande_${nom}_${date}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+  };
+}
+function renderStockHist(v, nom, tabs) {
+  const dates = Object.keys(S.stk.invs).sort().reverse(), P = S.stk.cat.produits || [];
+  const ligne = (d) => {
+    const inv = S.stk.invs[d], av = stockAvant(d); let val = 0, conso = 0, rec = 0;
+    P.forEach((p) => {
+      const c = (inv.comptes || {})[p.id], e = num((inv.entrees || {})[p.id]) * (num(p.parCond) || 1), pu = prixUnite(p);
+      rec += e * pu; const prec = av[p.id] ? av[p.id].q : null;
+      const ref = c !== undefined && c !== "" ? num(c) : prec !== null ? prec + e : null; if (ref !== null) val += ref * pu;
+      if (c !== undefined && c !== "" && prec !== null) conso += (prec + e - num(c)) * pu;
+    });
+    return `<tr><td><button class="link" data-hd="${d}">${esc(frDate(d))}</button></td><td class="num">${Object.keys(inv.comptes || {}).length}</td><td class="num">${F(Math.round(rec))}</td><td class="num">${F(Math.round(conso))}</td><td class="num">${F(Math.round(val))}</td><td class="small">${esc(inv.par || "")}</td></tr>`;
+  };
+  v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Stock — ${esc(nom)}</h2>${tabs}</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th class="num">Produits comptés</th><th class="num">Réceptions HT</th><th class="num">Consommation HT</th><th class="num">Valeur du stock</th><th>Saisi par</th></tr></thead><tbody>
+    ${dates.map(ligne).join("") || `<tr><td colspan="6" class="muted">Aucun inventaire enregistré pour l'instant.</td></tr>`}</tbody></table></div></div>`;
+  v.querySelectorAll("[data-hd]").forEach((b) => (b.onclick = () => { S.stkDate = b.dataset.hd; S.stkVue = "inv"; S.stk.edit = {}; render(); }));
+}
+/* Lecture d'une mercuriale fournisseur (un onglet par fournisseur, ligne d'en-tête « Libellé produit ») */
+function lireMercuriale(wb, enEuros) {
+  const out = [], vus = new Set();
+  wb.SheetNames.forEach((sn) => {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null });
+    const hi = rows.findIndex((r) => r && r.some((c) => typeof c === "string" && /^libn?[ée]+ll?[ée] produit|^libell[ée]|^d[ée]signation|^produit$/i.test(c.trim())));
+    if (hi < 0) return;
+    const h = rows[hi].map((c) => String(c || "").trim().toLowerCase());
+    const col = (re) => h.findIndex((x) => re.test(x));
+    const cL = col(/^lib|^d[ée]signation|^produit$/), cC = col(/^code/), cS = col(/cat[ée]gorie/), cPH = col(/^prix ht/), cV = col(/^valeur cond|^qt[ée] ?\/ ?colis|^colisage/), cN = col(/^nom cond|^conditionnement/), cU = col(/^unit[ée]/), cQ = col(/3 ?mois/), cPT = h.findIndex((x) => x === "prix");
+    rows.slice(hi + 1).forEach((r) => {
+      if (!r || !r[cL]) return;
+      const n0 = (i) => (i >= 0 && typeof r[i] === "number" ? r[i] : i >= 0 ? num(r[i]) : 0);
+      const q = n0(cQ), pt = n0(cPT), pc = q && pt ? pt / q : n0(cPH);
+      let par = n0(cV) || 1, unite = String((cU >= 0 && r[cU]) || "unité").trim().toLowerCase(), cond = String((cN >= 0 && r[cN]) || "").trim(), min = q ? Math.ceil((q * par) / 13) : 0;
+      if (/^unit(e|é)?s?$/.test(unite)) unite = "unité";
+      if (par < 1 || par !== Math.round(par)) { min = q ? Math.ceil(q / 13) : 0; par = 1; unite = (cond.toLowerCase().split(/ de |\s/)[0]) || "colis"; }
+      const code = String((cC >= 0 && r[cC]) || "").trim(), lib = String(r[cL]).split("|")[0].trim();
+      const id = code || lib.replace(/\W+/g, "").slice(0, 24); if (vus.has(id)) return; vus.add(id);
+      out.push({ id, lib, cat: String((cS >= 0 && r[cS]) || "Divers").replace(/^[A-Z]+-\d+-/, "").trim(), fourn: sn, code, cond, parCond: par, unite, prixCond: Math.round(pc * (enEuros ? EUR_XPF : 1)), min });
+    });
+  });
+  return out;
+}
+function renderStockCatalogue(v, nom, tabs) {
+  const P = (S.stk.catEdit || (S.stk.catEdit = JSON.parse(JSON.stringify(S.stk.cat.produits || []))));
+  const cats = [...new Set(P.map((p) => p.cat || "Divers"))].sort();
+  const sale = JSON.stringify(P) !== JSON.stringify(S.stk.cat.produits || []);
+  v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Stock — ${esc(nom)}</h2>${tabs}</div>
+    <div class="row" style="flex-wrap:wrap">
+      <input type="file" id="stMerc" accept=".xlsx,.xls" hidden><button id="stMercB">Importer une mercuriale (Excel)</button>
+      <label class="check small"><input type="checkbox" id="stEur" checked> Prix de la mercuriale en euros (× ${String(EUR_XPF).replace(".", ",")})</label>
+      <span class="grow"></span><button id="stAdd">+ Ajouter un produit</button>
+      <button class="primary" id="stCatSave" ${sale ? "" : "disabled"}>${sale ? "Enregistrer les produits" : "Produits enregistrés ✓"}</button>
+    </div>
+    ${S.stk.cat.source ? `<p class="small muted" style="margin:0">Source : ${esc(S.stk.cat.source)}</p>` : ""}
+    <p class="small muted" style="margin:0">Le <b>seuil</b> est le stock minimum (dans l'unité de comptage) en dessous duquel une alerte apparaît ; la commande suggérée remonte le stock à deux fois le seuil. Il a été estimé à une semaine de consommation d'après la mercuriale : ajustez-le à votre rythme réel.</p>
+    <datalist id="stCats">${cats.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+    <div class="tbl-wrap"><table class="stk"><thead><tr><th>Produit</th><th>Catégorie</th><th>Fournisseur</th><th>Code</th><th>Conditionnement</th><th class="num">Unités / colis</th><th>Unité de comptage</th><th class="num">Prix colis HT (F)</th><th class="num">Seuil</th><th></th></tr></thead><tbody>
+    ${P.map((p, i) => `<tr>
+      <td><input data-pf="lib" data-i="${i}" value="${esc(p.lib)}" style="min-width:14em"></td>
+      <td><input data-pf="cat" data-i="${i}" value="${esc(p.cat || "")}" list="stCats" style="width:10em"></td>
+      <td><input data-pf="fourn" data-i="${i}" value="${esc(p.fourn || "")}" style="width:9em"></td>
+      <td><input data-pf="code" data-i="${i}" value="${esc(p.code || "")}" style="width:6em"></td>
+      <td><input data-pf="cond" data-i="${i}" value="${esc(p.cond || "")}" style="width:9em"></td>
+      <td><input data-pf="parCond" data-n="1" data-i="${i}" value="${esc(qte(p.parCond || 1))}" style="width:5em;text-align:right"></td>
+      <td><input data-pf="unite" data-i="${i}" value="${esc(p.unite || "")}" style="width:7em"></td>
+      <td><input data-pf="prixCond" data-n="1" data-i="${i}" class="mt" value="${esc(fmtMt(p.prixCond || 0))}" style="width:7em;text-align:right"></td>
+      <td><input data-pf="min" data-n="1" data-i="${i}" value="${esc(qte(p.min || 0))}" style="width:5em;text-align:right"></td>
+      <td><button class="link" data-pdel="${i}" title="Retirer ce produit">✕</button></td></tr>`).join("") || `<tr><td colspan="10" class="muted">Aucun produit. Importez la mercuriale du fournisseur ou ajoutez les produits un par un.</td></tr>`}
+    </tbody></table></div></div>`;
+  v.querySelectorAll("[data-pf]").forEach((i) => (i.onchange = () => { P[i.dataset.i][i.dataset.pf] = i.dataset.n ? num(i.value) : i.value.trim(); const y = window.scrollY; render(); window.scrollTo(0, y); }));
+  v.querySelectorAll("[data-pdel]").forEach((b) => (b.onclick = () => { const p = P[b.dataset.pdel]; if (!confirm(`Retirer « ${p.lib} » de la liste ? Les inventaires passés restent conservés.`)) return; P.splice(Number(b.dataset.pdel), 1); render(); }));
+  $("#stAdd").onclick = () => { P.unshift({ id: "p" + Date.now().toString(36), lib: "Nouveau produit", cat: "Divers", fourn: "", code: "", cond: "", parCond: 1, unite: "unité", prixCond: 0, min: 0 }); render(); const i = v.querySelector('[data-pf="lib"]'); if (i) { i.focus(); i.select(); } };
+  $("#stMercB").onclick = () => $("#stMerc").click();
+  $("#stMerc").onchange = (e) => {
+    const f = e.target.files[0]; if (!f) return; const fr = new FileReader();
+    fr.onload = () => {
+      try {
+        const lus = lireMercuriale(XLSX.read(fr.result, { type: "array" }), $("#stEur").checked);
+        if (!lus.length) { toast("Aucun produit trouvé : la feuille doit contenir une colonne « Libellé produit »."); return; }
+        let nv = 0, maj = 0;
+        lus.forEach((x) => { const p = P.find((y) => y.id === x.id); if (p) { p.prixCond = x.prixCond; p.cond = x.cond || p.cond; maj++; } else { P.push(x); nv++; } });
+        S.stk.catSource = `${f.name} (importé le ${frDate(jourLocal())}${$("#stEur").checked ? `, prix € convertis à ${String(EUR_XPF).replace(".", ",")} XPF/€` : ""})`;
+        toast(`${nv} produit(s) ajouté(s), ${maj} prix mis à jour. Pensez à enregistrer.`); render();
+      } catch (err) { toast("Lecture du fichier impossible : " + (err.message || err)); }
+    };
+    fr.readAsArrayBuffer(f);
+  };
+  $("#stCatSave").onclick = async () => {
+    const doc = { ...S.stk.cat, societe: S.soc, produits: P, majLe: new Date().toISOString() }; delete doc.id;
+    if (S.stk.catSource) doc.source = S.stk.catSource;
+    try { await S.db.doc(`stock/${S.soc}_cat`).set(doc); S.stk.cat = doc; S.stk.catEdit = null; S.stk.catSource = null; toast("Liste des produits enregistrée."); render(); }
+    catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
   };
 }
 

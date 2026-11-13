@@ -203,3 +203,8 @@ drop policy if exists factures_pas_de_remplacement on storage.objects;
 create policy factures_pas_de_remplacement on storage.objects as restrictive for update to authenticated using (bucket_id <> 'factures');
 drop policy if exists charges_conservation on public.docs;
 create policy charges_conservation on public.docs as restrictive for delete to authenticated using (collection <> 'charges' or coalesce((data->>'le')::timestamptz, now()) < now() - interval '10 years');
+
+-- Stock (catalogue produits <SOC>_cat + inventaires quotidiens <SOC>_<AAAA-MM-JJ>), accessible aux responsables de la société
+alter table docs drop constraint docs_collection_check;
+alter table docs add constraint docs_collection_check check (collection = any (array['societes','salaries','saisies','ajustements','clotures','documents','caisse','charges','stock']));
+-- docs_lecture / docs_creation / docs_modif : 'stock' traité comme 'caisse' (is_resp(data->>'societe') et societe = préfixe de l'id)
