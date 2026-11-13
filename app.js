@@ -1978,36 +1978,45 @@ function lireMercuriale(wb, enEuros) {
   });
   return out;
 }
+const coutU = (x) => (x < 100 ? (Math.round(x * 100) / 100).toFixed(2).replace(".", ",") : F(Math.round(x)));
+const SRC_LIB = { newrest: "PR Newrest Nouméa", estimation: "Estimation (prix France × coef. d'approche)", manuel: "Saisi manuellement" };
+const srcChip = (p) => p.source === "newrest" ? `<div class="small muted" title="${esc(`${F(p.prixNR)} F HT — ${p.uniteNR || ""}`)}">PR Newrest</div>` : p.source === "estimation" ? `<div><span class="chip warn" title="Prix départ France × ${esc(String(p.coef || "").replace(".", ","))} F/€ (coefficient d'approche médian Newrest)">estimé</span></div>` : "";
 function renderStockCatalogue(v, nom, tabs) {
-  const P = (S.stk.catEdit || (S.stk.catEdit = JSON.parse(JSON.stringify(S.stk.cat.produits || []))));
+  const P = (S.stk.catEdit || (S.stk.catEdit = JSON.parse(JSON.stringify(S.stk.cat.produits || [])).sort((a, b) => (a.cat || "").localeCompare(b.cat || "") || a.lib.localeCompare(b.lib))));
   const cats = [...new Set(P.map((p) => p.cat || "Divers"))].sort();
-  const sale = JSON.stringify(P) !== JSON.stringify(S.stk.cat.produits || []);
+  const tri = (L) => JSON.stringify([...L].sort((a, b) => a.id.localeCompare(b.id))); const sale = tri(P) !== tri(S.stk.cat.produits || []);
   v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Stock — ${esc(nom)}</h2>${tabs}</div>
     <div class="row" style="flex-wrap:wrap">
       <input type="file" id="stMerc" accept=".xlsx,.xls" hidden><button id="stMercB">Importer une mercuriale (Excel)</button>
       <label class="check small"><input type="checkbox" id="stEur" checked> Prix de la mercuriale en euros (× ${String(EUR_XPF).replace(".", ",")})</label>
-      <span class="grow"></span><button id="stAdd">+ Ajouter un produit</button>
+      <span class="grow"></span><button id="stCatX">Export des coûts (Excel)</button><button id="stAdd">+ Ajouter un produit</button>
       <button class="primary" id="stCatSave" ${sale ? "" : "disabled"}>${sale ? "Enregistrer les produits" : "Produits enregistrés ✓"}</button>
     </div>
     ${S.stk.cat.source ? `<p class="small muted" style="margin:0">Source : ${esc(S.stk.cat.source)}</p>` : ""}
     <p class="small muted" style="margin:0">Le <b>seuil</b> est le stock minimum (dans l'unité de comptage) en dessous duquel une alerte apparaît ; la commande suggérée remonte le stock à deux fois le seuil. Il a été estimé à une semaine de consommation d'après la mercuriale : ajustez-le à votre rythme réel.</p>
     <datalist id="stCats">${cats.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
-    <div class="tbl-wrap"><table class="stk"><thead><tr><th>Produit</th><th>Catégorie</th><th>Fournisseur</th><th>Code</th><th>Conditionnement</th><th class="num">Unités / colis</th><th>Unité de comptage</th><th class="num">Prix colis HT (F)</th><th class="num">Seuil</th><th></th></tr></thead><tbody>
+    <div class="tbl-wrap"><table class="stk"><thead><tr><th>Produit</th><th class="num">Coût / unité</th><th class="num">Prix colis HT (F)</th><th>Catégorie</th><th>Fournisseur</th><th>Code</th><th>Conditionnement</th><th class="num">Unités / colis</th><th>Unité de comptage</th><th class="num">Seuil</th><th></th></tr></thead><tbody>
     ${P.map((p, i) => `<tr>
-      <td><input data-pf="lib" data-i="${i}" value="${esc(p.lib)}" style="min-width:14em"></td>
+      <td><input data-pf="lib" data-i="${i}" value="${esc(p.lib)}" style="min-width:17em"></td>
+      <td class="num" title="Prix du colis ÷ unités par colis">${coutU(prixUnite(p))}<div class="small muted">/ ${esc(p.unite || "unité")}</div></td>
+      <td><input data-pf="prixCond" data-n="1" data-i="${i}" class="mt" value="${esc(fmtMt(p.prixCond || 0))}" style="width:7em;text-align:right">${srcChip(p)}</td>
       <td><input data-pf="cat" data-i="${i}" value="${esc(p.cat || "")}" list="stCats" style="width:10em"></td>
       <td><input data-pf="fourn" data-i="${i}" value="${esc(p.fourn || "")}" style="width:9em"></td>
       <td><input data-pf="code" data-i="${i}" value="${esc(p.code || "")}" style="width:6em"></td>
       <td><input data-pf="cond" data-i="${i}" value="${esc(p.cond || "")}" style="width:9em"></td>
       <td><input data-pf="parCond" data-n="1" data-i="${i}" value="${esc(qte(p.parCond || 1))}" style="width:5em;text-align:right"></td>
       <td><input data-pf="unite" data-i="${i}" value="${esc(p.unite || "")}" style="width:7em"></td>
-      <td><input data-pf="prixCond" data-n="1" data-i="${i}" class="mt" value="${esc(fmtMt(p.prixCond || 0))}" style="width:7em;text-align:right"></td>
       <td><input data-pf="min" data-n="1" data-i="${i}" value="${esc(qte(p.min || 0))}" style="width:5em;text-align:right"></td>
-      <td><button class="link" data-pdel="${i}" title="Retirer ce produit">✕</button></td></tr>`).join("") || `<tr><td colspan="10" class="muted">Aucun produit. Importez la mercuriale du fournisseur ou ajoutez les produits un par un.</td></tr>`}
+      <td><button class="link" data-pdel="${i}" title="Retirer ce produit">✕</button></td></tr>`).join("") || `<tr><td colspan="11" class="muted">Aucun produit. Importez la mercuriale du fournisseur ou ajoutez les produits un par un.</td></tr>`}
     </tbody></table></div></div>`;
-  v.querySelectorAll("[data-pf]").forEach((i) => (i.onchange = () => { P[i.dataset.i][i.dataset.pf] = i.dataset.n ? num(i.value) : i.value.trim(); const y = window.scrollY; render(); window.scrollTo(0, y); }));
+  v.querySelectorAll("[data-pf]").forEach((i) => (i.onchange = () => { P[i.dataset.i][i.dataset.pf] = i.dataset.n ? num(i.value) : i.value.trim(); if (i.dataset.pf === "prixCond") { P[i.dataset.i].source = "manuel"; delete P[i.dataset.i].coef; } const y = window.scrollY; render(); window.scrollTo(0, y); }));
   v.querySelectorAll("[data-pdel]").forEach((b) => (b.onclick = () => { const p = P[b.dataset.pdel]; if (!confirm(`Retirer « ${p.lib} » de la liste ? Les inventaires passés restent conservés.`)) return; P.splice(Number(b.dataset.pdel), 1); render(); }));
   $("#stAdd").onclick = () => { P.unshift({ id: "p" + Date.now().toString(36), lib: "Nouveau produit", cat: "Divers", fourn: "", code: "", cond: "", parCond: 1, unite: "unité", prixCond: 0, min: 0 }); render(); const i = v.querySelector('[data-pf="lib"]'); if (i) { i.focus(); i.select(); } };
+  $("#stCatX").onclick = () => {
+    const rows = P.map((p) => ({ Catégorie: p.cat, Produit: p.lib, Fournisseur: p.fourn || "", Code: p.code || "", Conditionnement: p.cond || "", "Unités / colis": num(p.parCond) || 1, "Unité": p.unite, "Prix colis HT (F)": num(p.prixCond), "Coût unitaire HT (F)": Math.round(prixUnite(p) * 100) / 100, "Origine du prix": SRC_LIB[p.source] || "", Seuil: num(p.min) || "" }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Coûts produits");
+    enregistrerFichier(nomFichier(`Couts_produits_${nom}_${jourLocal()}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+  };
   $("#stMercB").onclick = () => $("#stMerc").click();
   $("#stMerc").onchange = (e) => {
     const f = e.target.files[0]; if (!f) return; const fr = new FileReader();
