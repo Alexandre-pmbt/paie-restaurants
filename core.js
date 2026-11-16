@@ -136,6 +136,12 @@ const PAIE = (() => {
       ne += j.ne; mal += j.mal; if (feries.has(j.d)) fer += j.h;
       if (j.cp && dow(j.d) !== 0) cpJ++;
     }
+    // Heures transmises par le gérant (variables forcées) : remplacent celles du planning
+    const FZ = v.force || {}; const fz = (k, x) => (FZ[k] === undefined || FZ[k] === null || FZ[k] === "" ? x : Number(FZ[k]) || 0);
+    const forces = Object.keys(FZ).filter((k) => FZ[k] !== undefined && FZ[k] !== null && FZ[k] !== "");
+    hc = fz("hc", hc); hs25 = fz("hs25", hs25); hs50 = fz("hs50", hs50); ne = fz("ne", ne); mal = fz("mal", mal); cpJ = fz("cpJ", cpJ);
+    const ss = fz("ss", 0);
+    if (forces.length) notes.push("Heures saisies manuellement d'après les éléments transmis (elles remplacent celles du planning).");
     if (reel) {
       const h = jours.filter((j) => j.d >= debM && j.d <= finM).reduce((a, j) => a + j.h, 0);
       add("Heures travaillées (payées au réel)", th, h, null, r(h * th), { anc: true });
@@ -144,6 +150,7 @@ const PAIE = (() => {
       add("Appointements mensuels", th, hm, null, baseM, { anc: true });
       if (ne) add("Heures non effectuées", th, ne, null, -r(ne * th), { anc: true });
       if (mal) add("Absence maladie", th, mal, null, -r(mal * th), { anc: true });
+      if (ss) add("Absence congés sans solde", th, ss, null, -r(ss * th), { anc: true });
       if (hc) add("Heures complémentaires", th, hc, null, r(hc * th), { anc: true });
       if (hs25) add("Heures supplémentaires à 25%", th, hs25, "125,0000", r(hs25 * th * 1.25), { anc: true });
       if (hs50) add("Heures supplémentaires à 50 %", th, hs50, "150,0000", r(hs50 * th * 1.5), { anc: true });
@@ -196,7 +203,7 @@ const PAIE = (() => {
     if (part) apres.push({ lib: `Repas - Part salarié ${soc.repasPct}%`, mt: -part });
     const nap = net + apres.reduce((a, x) => a + x.mt, 0);
     // Congés
-    const acq = finCdd ? 0 : (reel ? Math.round(2.5 * Math.min(1, trav / Math.max(hebdo * 4.33, 1)) * 2) / 2 : 2.5);
+    const acq = finCdd ? 0 : (reel ? Math.round(2.5 * Math.min(1, trav / Math.max(hebdo * 4.33, 1)) * 2) / 2 : ss ? Math.round(2.5 * Math.max(0, 1 - ss / hm) * 2) / 2 : 2.5);
     const cp = { acquis: acq, pris: cpJ && !reel ? cpJ : 0, solde: finCdd ? 0 : (Number(s.cpSolde) || 0) + acq - (cpJ && !reel ? cpJ : 0), n1: Math.max((Number(s.cpN1) || 0) - cpN1, 0) };
     return { lignes, brut, cot, ts, tp, net, apres, nap, cout: brut + tp, notes, cp, th, baseM, reel, assid, assidAuto, trav, repas, part };
   }

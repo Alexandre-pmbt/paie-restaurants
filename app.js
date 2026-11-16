@@ -60,7 +60,7 @@ function calculer(s) {
   const soc = socDoc();
   const plan = S.saisie && S.saisie.planning ? PAIE.planPour(S.saisie.planning, s.planningNoms && s.planningNoms.length ? s.planningNoms : [s.prenom]) : null;
   const b = PAIE.calcul(soc, s, plan, varsPour(s), S.mois);
-  if (!plan && !s.sansPlanning) b.notes.unshift("Absent du planning : salaire de base versé sans variable.");
+  if (!plan && !s.sansPlanning && !(S.ajust[s.id] || {}).force) b.notes.unshift("Absent du planning : salaire de base versé sans variable.");
   return b;
 }
 function resultats() {
@@ -310,6 +310,9 @@ function renderBulletins(v) {
     const a = { primeExc: num("primeExc"), valeurJourCP: num("valeurJourCP"), assiduite: fd.get("assid") === "auto" ? null : fd.get("assid") === "oui",
       oa: num("oaMt") ? { lib: fd.get("oaLib") || "Opposition administrative", montant: num("oaMt") } : null,
       autres: num("autMt") ? [{ lib: fd.get("autLib") || "Retenue", montant: num("autMt") }] : [] };
+    const force = {}; ["hc", "hs25", "hs50", "ne", "mal", "ss", "cpJ"].forEach((k) => { const x = num("f_" + k); if (x !== undefined) force[k] = x; });
+    if (Object.keys(force).length) a.force = force;
+    if ((S.ajust[id] || {}).forceNote) a.forceNote = S.ajust[id].forceNote;
     Object.keys(a).forEach((k) => a[k] === undefined && delete a[k]);
     try { await S.db.doc("ajustements/" + cle()).set({ par: { ...S.ajust, [id]: a } }); toast("Ajustements enregistrés."); }
     catch (e2) { toast("Enregistrement refusé : " + (e2.message || e2.code)); }
@@ -329,6 +332,8 @@ function ajustPanel({ s, b }) {
       <label>Saisie / opposition : montant (F)<input name="oaMt" id="aj_oam" type="number" step="1" value="${a.oa?.montant ?? ""}" ${clos ? "disabled" : ""}></label>
       <label>Autre retenue : libellé<input name="autLib" id="aj_aul" value="${esc(a.autres?.[0]?.lib ?? "")}" ${clos ? "disabled" : ""}></label>
       <label>Autre retenue : montant (F)<input name="autMt" id="aj_aum" type="number" step="1" value="${a.autres?.[0]?.montant ?? ""}" ${clos ? "disabled" : ""}></label>
+      <div style="grid-column:1/-1"><b class="small">Heures du mois à forcer</b> <span class="small muted">— à remplir seulement si le planning n'est pas déposé ou si le gérant transmet d'autres totaux ; vide = calcul d'après le planning.</span>${a.forceNote ? `<div class="small muted">${esc(a.forceNote)}</div>` : ""}</div>
+      ${[["hc", "Heures complémentaires"], ["hs25", "Heures sup. à 25 %"], ["hs50", "Heures sup. à 50 %"], ["ne", "Heures non effectuées"], ["mal", "Heures d'absence maladie"], ["ss", "Heures de congés sans solde"], ["cpJ", "Jours de congés payés (ouvrables)"]].map(([k, l]) => `<label>${l}<input name="f_${k}" id="aj_f_${k}" type="number" step="0.01" min="0" value="${a.force?.[k] ?? ""}" ${clos ? "disabled" : ""}></label>`).join("")}
       <div class="row" style="align-self:end"><button class="primary" type="submit" ${clos ? "disabled" : ""}>Enregistrer</button></div>
     </form>
     <h3>Congés payés</h3>
