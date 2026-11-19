@@ -143,6 +143,12 @@ html[data-marque="pizza"] .brand img{background:#fff}
 }
 input.auto,select.auto{background:var(--accent-soft)}
 #fac_etat{padding:6px 8px;border-radius:6px;background:var(--soft)}#fac_etat.warn{background:var(--warn-soft);color:var(--warn)}
+
+table.pl td{padding:3px 4px;vertical-align:top;min-width:92px} table.pl td:first-child{min-width:110px;white-space:nowrap}
+.pl-in{width:100%;min-width:84px;font-size:12.5px;padding:4px 5px;border:1px solid var(--line);border-radius:4px;background:var(--surface);color:var(--ink)}
+.pl-on .pl-in{border-color:var(--accent,#2a6f97)} .pl-cp{background:#ffe7c2} .pl-mal{background:#ffd6f5} .pl-ne{background:#ffd3d0} .pl-err .pl-in{border-color:var(--bad);color:var(--bad)}
+.pl-hors{background:var(--soft)} th.pl-fer{color:var(--bad)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .pl-cp{background:#4a3410}:root:not([data-theme="light"]) .pl-mal{background:#4a1d43}:root:not([data-theme="light"]) .pl-ne{background:#4d1f1c}}
 </style>
 </head>
 <body>
@@ -168,12 +174,12 @@ input.auto,select.auto{background:var(--accent-soft)}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="supabase-config.js?v=20261119a"></script>
-<script src="supa-db.js?v=20261119a"></script>
-<script src="core.js?v=20261119a"></script>
-<script src="contrats.js?v=20261119a"></script>
-<script src="docx.js?v=20261119a"></script>
-<script src="cafat.js?v=20261119a"></script>
-<script src="app.js?v=20261119a"></script>
+<script src="supabase-config.js?v=20261119b"></script>
+<script src="supa-db.js?v=20261119b"></script>
+<script src="core.js?v=20261119b"></script>
+<script src="contrats.js?v=20261119b"></script>
+<script src="docx.js?v=20261119b"></script>
+<script src="cafat.js?v=20261119b"></script>
+<script src="app.js?v=20261119b"></script>
 </body>
 </html>

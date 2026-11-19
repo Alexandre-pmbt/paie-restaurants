@@ -14,8 +14,8 @@ function defaultMois() { const d = new Date(); d.setDate(1); d.setMonth(d.getMon
 S.mois = store.get("paie.mois") || defaultMois();
 $("#selMois").value = S.mois;
 
-const TABS_ADMIN = [["rentab", "Rentabilité"], ["caisse", "Caisse & factures"], ["stock", "Stock"], ["archives", "Archives comptables"], ["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
-const TABS_RESP = [["saisie", "Saisie du mois"], ["caisse", "Caisse & factures"], ["stock", "Stock"], ["archives", "Archives comptables"]];
+const TABS_ADMIN = [["rentab", "Rentabilité"], ["caisse", "Caisse & factures"], ["stock", "Stock"], ["archives", "Archives comptables"], ["planning", "Planning"], ["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
+const TABS_RESP = [["planning", "Planning"], ["saisie", "Saisie du mois"], ["caisse", "Caisse & factures"], ["stock", "Stock"], ["archives", "Archives comptables"]];
 function renderTabs() {
   let tabs = S.admin ? TABS_ADMIN : TABS_RESP;
   const sd = typeof socDoc === "function" ? socDoc() : null;
@@ -32,9 +32,11 @@ function resub() {
   S.unsub.forEach((u) => u()); S.unsub = [];
   if (!S.db || !S.soc) { render(); return; }
   S.saisie = null; S.ajust = {}; S.cloture = null; S.parsed = null; S.sel = null;
-  S.unsub.push(S.db.doc("saisies/" + cle()).onSnapshot((d) => { S.saisie = d.exists ? d.data() : null; render(); }, err));
+  S.unsub.push(S.db.doc("saisies/" + cle()).onSnapshot((d) => { const nv = d.exists ? d.data() : null;
+    if (S.pl && S.pl.dirty && S.saisie) { if (nv) { nv.planning = S.saisie.planning; nv.shifts = S.saisie.shifts; } else return; }
+    S.saisie = nv; render(); }, err));
   if (S.admin) {
-    S.unsub.push(S.db.collection("salaries").where("societe", "==", S.soc).onSnapshot((q) => { S.salaries = q.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.ordre ?? 99) - (b.ordre ?? 99) || a.nom.localeCompare(b.nom)); render(); }, err));
+    S.unsub.push(S.db.collection("salaries").where("societe", "==", S.soc).onSnapshot((q) => { S.salaries = q.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.ordre ?? 99) - (b.ordre ?? 99) || a.nom.localeCompare(b.nom)); synchroEquipePlanning(); render(); }, err));
     S.unsub.push(S.db.doc("ajustements/" + cle()).onSnapshot((d) => { S.ajust = d.exists ? (d.data().par || {}) : {}; render(); }, err));
     S.unsub.push(S.db.collection("documents").where("societe", "==", S.soc).onSnapshot((q) => { S.docs = q.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.le || "").localeCompare(a.le || "")); if (S.tab === "contrats") render(); }, err));
     S.unsub.push(S.db.collection("salaries").onSnapshot((q) => { S.tous = q.docs.map((d) => ({ id: d.id, ...d.data() })); render(); }, err));
@@ -151,6 +153,7 @@ function renderVue() {
   if (S.admin && S.tab === "equipe") return renderEquipe(v);
   if (!S.socs.length) { if (S.admin) return renderDemarrage(v); v.innerHTML = `<div class="empty">Aucune société ne vous est attribuée pour l'instant. Demandez au gérant de vous donner accès.</div>`; return; }
   if (S.tab === "saisie") return renderSaisie(v);
+  if (S.tab === "planning") return renderPlanning(v);
   if (S.tab === "caisse") return renderCaisse(v);
   if (S.tab === "stock") return renderStock(v);
   if (S.tab === "archives") return renderArchivesCompta(v);
@@ -256,7 +259,7 @@ async function enregistrerSaisie() {
   document.querySelectorAll("input[data-k]").forEach((i) => { const k = i.dataset.k; vars[k] = vars[k] || {}; if (i.value !== "") vars[k][i.dataset.f] = Number(i.value); });
   const base = S.parsed || S.saisie || {};
   const me = S.profil.uid;
-  const doc = { societe: S.soc, mois: S.mois, planning: base.planning || {}, alertes: base.alertes || [], semaines: base.semaines || [], fichier: base.fichier || "", variables: vars, majPar: me, majParNom: S.profil.nom || "", majLe: new Date().toISOString(), cloture: !!(S.saisie && S.saisie.cloture) };
+  const doc = { societe: S.soc, mois: S.mois, planning: base.planning || {}, alertes: base.alertes || [], semaines: base.semaines || [], fichier: base.fichier || "", variables: vars, ...(S.parsed ? { source: "excel" } : { shifts: base.shifts || null, planningMaj: base.planningMaj || null, planningPar: base.planningPar || null, source: base.source || null }), majPar: me, majParNom: S.profil.nom || "", majLe: new Date().toISOString(), cloture: !!(S.saisie && S.saisie.cloture) };
   try { await S.db.doc("saisies/" + cle()).set(doc); S.parsed = null; toast("Planning et variables enregistrés."); }
   catch (e) { toast("Enregistrement refusé : " + (e.message || e.code)); }
 }
@@ -2087,6 +2090,209 @@ function renderStockCatalogue(v, nom, tabs) {
     try { await S.db.doc(`stock/${S.soc}_cat`).set(doc); S.stk.cat = doc; S.stk.catEdit = null; S.stk.catSource = null; toast("Liste des produits enregistrée."); render(); }
     catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
   };
+}
+
+/* ---------- Planning : saisi par les responsables, il alimente directement les bulletins ---------- */
+const JOURS_PL = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."];
+const plAdd = (d, n) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+/* Semaines du mois de paie : du lundi au dimanche, rattachées au mois de leur dimanche */
+function semainesPaie(mois) {
+  const [y, m] = mois.split("-").map(Number); const out = [];
+  let d = `${mois}-01`; while (new Date(d + "T00:00:00Z").getUTCDay() !== 0) d = plAdd(d, 1); // premier dimanche
+  const fin = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  for (; d <= fin; d = plAdd(d, 7)) out.push(plAdd(d, -6));
+  return out;
+}
+const moisDecale = (mois, n) => { const [y, m] = mois.split("-").map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return d.toISOString().slice(0, 7); };
+const hTxt = (h) => { if (!h) return ""; const mn = Math.round(h * 60); return `${Math.floor(mn / 60)}h${mn % 60 ? String(mn % 60).padStart(2, "0") : ""}`; };
+/* Lecture d'une case : « 9-14 », « 9h-14h30 18h-22h », « 7h » (durée), « cp », « mal 5 », « abs 4 », vide = repos */
+function lireCase(txt, defH) {
+  const t = String(txt || "").trim().toLowerCase().replace(/,/g, ".").replace(/[–—]/g, "-");
+  const res = { txt: "", h: 0, cp: false, ne: 0, mal: 0 };
+  if (!t || /^(r|repos|-|x)$/.test(t)) return res;
+  let m;
+  if (/^(cp|c\.p\.?|cong[ée]s?)$/.test(t)) return { ...res, txt: "CP", cp: true };
+  const dur = (a, b) => (a === undefined ? null : Number(a) + (b ? Number(b) / 60 : 0));
+  if ((m = t.match(/^(m|mal|maladie|am|arr[eê]t)\s*(?:(\d+(?:\.\d+)?)\s*h?\s*(\d{2})?)?$/))) { const x = dur(m[2], m[3]) ?? defH; return { ...res, txt: `MAL ${hTxt(x)}`, mal: x }; }
+  if ((m = t.match(/^(abs|absent|absence|ne|nj)\s*(?:(\d+(?:\.\d+)?)\s*h?\s*(\d{2})?)?$/))) { const x = dur(m[2], m[3]) ?? defH; return { ...res, txt: `ABS ${hTxt(x)}`, ne: x }; }
+  const re = /(\d{1,2})(?:[h:.](\d{2})?)?\s*(?:-|à|a)\s*(\d{1,2})(?:[h:.](\d{2})?)?/g; const plages = [];
+  while ((m = re.exec(t))) {
+    const a = Number(m[1]) + Number(m[2] || 0) / 60; let b = Number(m[3]) + Number(m[4] || 0) / 60;
+    if (a > 24 || b > 24) return { ...res, err: "Heure invalide" };
+    if (b <= a) b += 24; plages.push([a, b]);
+  }
+  if (plages.length) {
+    const h = plages.reduce((s, [a, b]) => s + b - a, 0);
+    const f = (x) => { x = x % 24; const mn = Math.round(x * 60); return `${Math.floor(mn / 60)}h${mn % 60 ? String(mn % 60).padStart(2, "0") : ""}`; };
+    return { ...res, txt: plages.map(([a, b]) => `${f(a)}-${f(b)}`).join(" "), h: Math.round(h * 100) / 100, plages };
+  }
+  if ((m = t.match(/^(\d{1,2})\s*h\s*(\d{2})$/))) { const h = Number(m[1]) + Number(m[2]) / 60; return { ...res, txt: hTxt(h), h }; }
+  if ((m = t.match(/^(\d+(?:\.\d+)?)\s*h?$/)) && Number(m[1]) <= 24) { const h = Number(m[1]); return { ...res, txt: hTxt(h), h }; }
+  return { ...res, err: "Format non reconnu" };
+}
+/* Équipe visible par les responsables (sans salaires) : copiée dans la fiche société par l'administrateur */
+function equipePlanningDe(sals) {
+  return sals.filter((s) => s.statut !== "archive" && !s.sansPlanning).map((s) => ({ cle: PAIE.normNom((s.planningNoms && s.planningNoms.length ? s.planningNoms : [s.prenom])[0]), prenom: s.prenom, nom: s.nom, hebdo: Number(s.hebdo) || 39, entree: s.entree || "", sortie: s.sortie || "", statut: s.statut || "actif", emploi: s.emploi || "", ordre: s.ordre ?? 99 }))
+    .sort((a, b) => a.ordre - b.ordre || a.prenom.localeCompare(b.prenom));
+}
+function synchroEquipePlanning() {
+  if (!S.admin || !S.soc || !S.salaries || !S.salaries.length || S.salaries[0].societe !== S.soc) return;
+  const soc = socDoc(); if (!soc || soc.horsPaie) return;
+  const eq = equipePlanningDe(S.salaries);
+  if (JSON.stringify(eq) === JSON.stringify(soc.equipePlanning || [])) return;
+  soc.equipePlanning = eq; S.db.doc("societes/" + S.soc).update({ equipePlanning: eq }).catch(() => {});
+}
+S.pl = { sem: null, dirty: false, tm: null, vue: "semaine" };
+function plEquipe(semaine) {
+  const fin = plAdd(semaine, 6);
+  const eq = S.admin && S.salaries.length && S.salaries[0].societe === S.soc ? equipePlanningDe(S.salaries) : ((socDoc() || {}).equipePlanning || []);
+  return eq.filter((e) => (!e.entree || e.entree <= fin) && (!e.sortie || e.sortie >= semaine));
+}
+function plCase(cle, d) { const sh = (S.saisie && S.saisie.shifts) || {}; if (sh[cle] && sh[cle][d] !== undefined) return sh[cle][d];
+  const p = S.saisie && S.saisie.planning && S.saisie.planning[cle]; const j = p && p.jours.find((x) => x.d === d);
+  if (!j) return ""; if (j.cp) return "CP"; if (j.mal) return `MAL ${hTxt(j.mal)}`; if (j.ne && !j.h) return `ABS ${hTxt(j.ne)}`; return j.h ? hTxt(j.h) : ""; }
+function renderPlanning(v) {
+  const soc = socDoc(); if (!soc) { v.innerHTML = `<div class="panel empty">Choisissez un restaurant.</div>`; return; }
+  const sems = semainesPaie(S.mois);
+  if (!S.pl.sem || !sems.includes(S.pl.sem)) { const auj = jourLocal(); S.pl.sem = sems.find((l) => auj >= l && auj <= plAdd(l, 6)) || sems[0]; }
+  const L = S.pl.sem, jours = [0, 1, 2, 3, 4, 5, 6].map((i) => plAdd(L, i)), feries = new Set(soc.feries || []);
+  const clos = S.cloture || (S.saisie && S.saisie.cloture);
+  const eq = plEquipe(L);
+  const nav = `<div class="row" style="flex-wrap:wrap;gap:6px">
+      <button id="plPrev" title="Semaine précédente">◀</button>
+      ${sems.map((l, i) => `<button class="${l === L ? "primary" : ""}" data-plsem="${l}">S${i + 1} · ${frDate(l).slice(0, 5)}–${frDate(plAdd(l, 6)).slice(0, 5)}</button>`).join("")}
+      <button id="plNext" title="Semaine suivante">▶</button>
+      <button class="${S.pl.vue === "recap" ? "primary" : ""}" id="plRecap">Récap du mois</button></div>`;
+  if (!eq.length) { v.innerHTML = `<div class="panel"><h2>Planning</h2>${nav}<p class="muted">L'équipe de ce restaurant n'est pas encore disponible${S.admin ? " : ajoutez les salariés dans l'onglet Salariés." : " : l'administrateur doit ouvrir le logiciel une fois pour la partager."}</p></div>`; lierPlanningNav(v, sems); return; }
+  if (S.pl.vue === "recap") { renderPlanningRecap(v, soc, sems, nav); lierPlanningNav(v, sems); return; }
+  const act = document.activeElement && document.activeElement.classList && document.activeElement.classList.contains("pl-in") ? { li: document.activeElement.dataset.li, ci: document.activeElement.dataset.ci, val: document.activeElement.value, modif: document.activeElement.value !== document.activeElement.defaultValue } : null;
+  S.pl.act = act;
+  const lignes = eq.map((e) => {
+    const defH = Math.round(e.hebdo / 6 * 4) / 4;
+    const cases = jours.map((d) => { const hors = (e.entree && d < e.entree) || (e.sortie && d > e.sortie); const r = lireCase(plCase(e.cle, d), defH); return { d, hors, r, brut: plCase(e.cle, d) }; });
+    const w = cases.reduce((a, c) => a + c.r.h, 0);
+    const hc = e.hebdo < 39 ? Math.max(Math.min(w, 39) - e.hebdo, 0) : 0, hs = Math.max(w - 39, 0);
+    const absH = cases.reduce((a, c) => a + c.r.mal + c.r.ne, 0) + cases.filter((c) => c.r.cp).length * defH;
+    const alertes = [];
+    if (w > 48) alertes.push("plus de 48 h dans la semaine");
+    cases.forEach((c) => { if (c.r.h > 12) alertes.push(`${JOURS_PL[jours.indexOf(c.d)]} : plus de 12 h`); });
+    if (cases.filter((c) => c.r.h > 0).length > 6) alertes.push("aucun jour de repos");
+    return { e, cases, w, hc, hs, absH, alertes, defH };
+  });
+  const totJour = jours.map((d, i) => lignes.reduce((a, l) => a + l.cases[i].r.h, 0));
+  const cls = (r) => (r.err ? "pl-err" : r.cp ? "pl-cp" : r.mal ? "pl-mal" : r.ne ? "pl-ne" : r.h ? "pl-on" : "");
+  v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Planning · ${esc(soc.enseigne || ENSEIGNES[soc.id] || soc.nom)} · paie de ${esc(moisLib(S.mois).toLowerCase())}</h2>
+      <span class="small muted" id="plEtat">${clos ? "Mois clôturé : lecture seule" : S.saisie && S.saisie.planningMaj ? `Enregistré ${esc(frDate(S.saisie.planningMaj.slice(0, 10)))}${S.saisie.planningPar ? " par " + esc(S.saisie.planningPar) : ""}` : ""}</span></div>
+    ${nav}
+    <div class="row" style="flex-wrap:wrap;gap:6px">
+      <button id="plCopie" ${clos ? "disabled" : ""}>Copier la semaine précédente</button>
+      <button id="plVide" ${clos ? "disabled" : ""}>Vider la semaine</button>
+      <button id="plPrint">Imprimer / afficher</button>
+      <span class="grow"></span>
+      <span class="small muted">Saisie : <b>9-14</b> · <b>9h-14h30 18h-22h</b> (coupure) · <b>7</b> (durée) · <b>cp</b> · <b>mal</b> ou <b>mal 5</b> · <b>abs 4</b> (heures non effectuées) · vide = repos. Entrée = case du dessous.</span>
+    </div>
+    <div class="tbl-wrap"><table class="pl"><thead><tr><th>Salarié</th>${jours.map((d, i) => `<th class="${feries.has(d) ? "pl-fer" : ""}">${JOURS_PL[i]} ${frDate(d).slice(0, 5)}${feries.has(d) ? "<div class=\"small\">férié</div>" : ""}</th>`).join("")}<th class="num">Semaine</th></tr></thead><tbody>
+    ${lignes.map((l, li) => `<tr><td><b>${esc(l.e.prenom)}</b> <span class="small muted">${esc((l.e.nom || "").slice(0, 1))}.</span><div class="small muted">contrat ${hTxt(l.e.hebdo)}</div></td>
+      ${l.cases.map((c, ci) => c.hors ? `<td class="pl-hors small muted">hors contrat</td>` : `<td class="${cls(c.r)}"><input class="pl-in" data-k="${esc(l.e.cle)}" data-d="${c.d}" data-li="${li}" data-ci="${ci}" value="${esc(c.r.err ? c.brut : c.r.txt)}" ${clos ? "disabled" : ""} aria-label="${esc(l.e.prenom)} ${JOURS_PL[ci]} ${frDate(c.d)}"><div class="small ${c.r.err ? "" : "muted"}">${c.r.err ? esc(c.r.err) : c.r.h && c.r.plages ? hTxt(c.r.h) : "&nbsp;"}</div></td>`).join("")}
+      <td class="num"><b>${hTxt(l.w) || "0h"}</b>${l.hc ? `<div class="small" style="color:var(--warn)">+${hTxt(l.hc)} compl.</div>` : ""}${l.hs ? `<div class="small" style="color:var(--bad)">+${hTxt(l.hs)} sup.</div>` : ""}${!l.hc && !l.hs && l.w + l.absH < l.e.hebdo - 0.01 ? `<div class="small muted">−${hTxt(l.e.hebdo - l.w - l.absH)} / contrat</div>` : ""}${l.alertes.map((a) => `<div class="small" style="color:var(--bad)">⚠ ${esc(a)}</div>`).join("")}</td></tr>`).join("")}
+    <tr class="total"><td>Heures planifiées</td>${totJour.map((t) => `<td class="num">${hTxt(t) || "—"}</td>`).join("")}<td class="num">${hTxt(totJour.reduce((a, b) => a + b, 0))}</td></tr>
+    </tbody></table></div>
+    <p class="small muted" style="margin:0">Le planning est enregistré automatiquement et sert directement au calcul des fiches de paie du mois (heures complémentaires, supplémentaires, congés, absences). Les semaines vont du lundi au dimanche ; une semaine est payée sur le mois de son dimanche.</p>
+  </div>`;
+  lierPlanningNav(v, sems);
+  if (act) { const f = v.querySelector(`.pl-in[data-li="${act.li}"][data-ci="${act.ci}"]`); if (f) { if (act.modif) f.value = act.val; f.focus(); if (!act.modif) f.select(); } }
+  if (clos) { $("#plPrint").onclick = () => imprimerPlanning(soc, L, jours, lignes); return; }
+  const ins = [...v.querySelectorAll(".pl-in")];
+  const aller = (li, ci) => { const f = v.querySelector(`.pl-in[data-li="${li}"][data-ci="${ci}"]`); if (f) f.focus(); };
+  ins.forEach((i) => {
+    i.onchange = () => { majCase(i.dataset.k, i.dataset.d, i.value); setTimeout(render, 0); };
+    i.onkeydown = (e) => {
+      const li = Number(i.dataset.li), ci = Number(i.dataset.ci);
+      if (e.key === "Enter" || e.key === "ArrowDown") { e.preventDefault(); aller(li + 1, ci); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); aller(li - 1, ci); }
+      else if (e.key === "Escape") { i.value = i.defaultValue; i.blur(); }
+    };
+    i.onfocus = () => i.select();
+  });
+  $("#plCopie").onclick = async () => {
+    const prev = plAdd(L, -7); const src = {};
+    let base = S.saisie;
+    if (!semainesPaie(S.mois).includes(prev)) { try { const d = await S.db.doc(`saisies/${S.soc}_${moisDecale(S.mois, -1)}`).get(); base = d.exists ? d.data() : null; } catch (e) { base = null; } }
+    const lire = (k, d) => { const sh = (base && base.shifts) || {}; if (sh[k] && sh[k][d] !== undefined) return sh[k][d]; const p = base && base.planning && base.planning[k]; const j = p && p.jours.find((x) => x.d === d); if (!j) return ""; if (j.cp) return "CP"; if (j.mal) return `MAL ${hTxt(j.mal)}`; return j.h ? hTxt(j.h) : ""; };
+    let n = 0; eq.forEach((e) => jours.forEach((d, i) => { const t = lire(e.cle, plAdd(prev, i)); if (t) n++; src[e.cle + "|" + d] = /^(CP|MAL|ABS)/.test(t) ? "" : t; }));
+    if (!n) { toast("La semaine précédente est vide."); return; }
+    if (jours.some((d) => eq.some((e) => plCase(e.cle, d))) && !confirm("Remplacer les horaires déjà saisis cette semaine par ceux de la semaine précédente ?")) return;
+    Object.entries(src).forEach(([k, t]) => { const [cle, d] = k.split("|"); majCase(cle, d, t, true); }); planifierSauvegarde(); render(); toast("Semaine précédente copiée (sans les congés et absences).");
+  };
+  $("#plVide").onclick = () => { if (!confirm("Effacer tous les horaires de cette semaine ?")) return; eq.forEach((e) => jours.forEach((d) => majCase(e.cle, d, "", true))); planifierSauvegarde(); render(); };
+  $("#plPrint").onclick = () => imprimerPlanning(soc, L, jours, lignes);
+}
+function lierPlanningNav(v, sems) {
+  v.querySelectorAll("[data-plsem]").forEach((b) => (b.onclick = () => { S.pl.sem = b.dataset.plsem; S.pl.vue = "semaine"; render(); }));
+  const aller = (n) => { const i = sems.indexOf(S.pl.sem) + n; if (S.pl.vue === "recap") S.pl.vue = "semaine";
+    if (i >= 0 && i < sems.length) { S.pl.sem = sems[i]; render(); return; }
+    const m = moisDecale(S.mois, n > 0 ? 1 : -1); const s2 = semainesPaie(m); S.pl.sem = n > 0 ? s2[0] : s2[s2.length - 1];
+    S.mois = m; $("#selMois").value = m; store.set("paie.mois", m); resub(); };
+  const p = $("#plPrev"), n = $("#plNext"), r = $("#plRecap");
+  if (p) p.onclick = () => aller(-1); if (n) n.onclick = () => aller(1); if (r) r.onclick = () => { S.pl.vue = S.pl.vue === "recap" ? "semaine" : "recap"; render(); };
+}
+/* Met à jour une case puis reconstruit le planning du salarié au format lu par le moteur de paie */
+function majCase(cle, d, txt, sansSauver) {
+  if (!S.saisie) S.saisie = { societe: S.soc, mois: S.mois, cloture: false, nouveau: true };
+  const e = plEquipe(plAdd(d, -((new Date(d + "T00:00:00Z").getUTCDay() + 6) % 7))).find((x) => x.cle === cle) || { hebdo: 39, prenom: cle };
+  const defH = Math.round(e.hebdo / 6 * 4) / 4; const r = lireCase(txt, defH);
+  const shifts = S.saisie.shifts = S.saisie.shifts || {}; const sh = shifts[cle] = shifts[cle] || {};
+  sh[d] = r.err ? String(txt).trim() : r.txt;
+  const sems = semainesPaie(S.mois), planning = S.saisie.planning = S.saisie.planning || {};
+  const ancien = planning[cle];
+  const jours = [];
+  sems.forEach((l) => { for (let i = 0; i < 7; i++) { const dd = plAdd(l, i); let x;
+    if (sh[dd] !== undefined) { const rr = lireCase(sh[dd], defH); x = { d: dd, h: rr.err ? 0 : rr.h, cp: rr.cp, ne: rr.ne, mal: rr.mal }; if (rr.mal) x.malJour = true; }
+    else { const j = ancien && ancien.jours.find((y) => y.d === dd); x = j ? { ...j } : { d: dd, h: 0, cp: false, ne: 0, mal: 0 }; }
+    jours.push(x); } });
+  planning[cle] = { libelle: (e.prenom || cle).toUpperCase(), semaines: sems, jours };
+  if (!sansSauver) planifierSauvegarde();
+}
+function planifierSauvegarde() {
+  S.pl.dirty = true; const etat = $("#plEtat"); if (etat) etat.textContent = "Enregistrement…";
+  clearTimeout(S.pl.tm); S.pl.tm = setTimeout(sauverPlanning, 700);
+}
+async function sauverPlanning() {
+  if (!S.saisie || !S.pl.dirty) return; S.pl.dirty = false;
+  const k = cle(), maj = { planning: S.saisie.planning, shifts: S.saisie.shifts, planningMaj: new Date().toISOString(), planningPar: (S.profil && S.profil.nom) || "", source: "planning" };
+  try {
+    if (S.saisie.nouveau) { const doc = { societe: S.soc, mois: S.mois, cloture: false, alertes: [], ...maj }; await S.db.doc("saisies/" + k).set(doc); delete S.saisie.nouveau; }
+    else await S.db.doc("saisies/" + k).update(maj);
+    const etat = $("#plEtat"); if (etat) etat.textContent = "Enregistré ✓";
+  } catch (e) { S.pl.dirty = true; toast("Planning non enregistré : " + (e.message || e.code || e)); const etat = $("#plEtat"); if (etat) etat.textContent = "Non enregistré"; }
+}
+window.addEventListener("beforeunload", (e) => { if (S.pl && S.pl.dirty) { sauverPlanning(); e.preventDefault(); e.returnValue = ""; } });
+function renderPlanningRecap(v, soc, sems, nav) {
+  const feries = new Set(soc.feries || []);
+  const eq = [...new Map(sems.flatMap((l) => plEquipe(l)).map((e) => [e.cle, e])).values()];
+  const rows = eq.map((e) => {
+    const defH = Math.round(e.hebdo / 6 * 4) / 4; let tot = 0, hc = 0, hs25 = 0, hs50 = 0, cp = 0, mal = 0, ne = 0, fer = 0; const parSem = [];
+    sems.forEach((l) => { let w = 0; for (let i = 0; i < 7; i++) { const d = plAdd(l, i); if ((e.entree && d < e.entree) || (e.sortie && d > e.sortie)) continue; const r = lireCase(plCase(e.cle, d), defH); w += r.h; mal += r.mal; ne += r.ne; if (r.cp && i < 6) cp++; if (feries.has(d)) fer += r.h; }
+      parSem.push(w); tot += w; if (e.hebdo < 39) hc += Math.max(Math.min(w, 39) - e.hebdo, 0); hs25 += Math.min(Math.max(w - 39, 0), 8); hs50 += Math.max(w - 47, 0); });
+    return { e, parSem, tot, hc, hs25, hs50, cp, mal, ne, fer };
+  });
+  const c = (x) => (x ? hTxt(x) : "—");
+  v.innerHTML = `<div class="panel"><div class="row"><h2 class="grow">Récap du planning · paie de ${esc(moisLib(S.mois).toLowerCase())}</h2></div>${nav}
+    <p class="small muted" style="margin:0">Ce que le planning transmet à la paie. Les montants sont calculés dans l'onglet Bulletins.</p>
+    <div class="tbl-wrap"><table><thead><tr><th>Salarié</th>${sems.map((l, i) => `<th class="num">S${i + 1}</th>`).join("")}<th class="num">Total</th><th class="num">H. compl.</th><th class="num">H. sup. 25 %</th><th class="num">H. sup. 50 %</th><th class="num">Fériés travaillés</th><th class="num">CP (jours)</th><th class="num">Maladie</th><th class="num">Non effectuées</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td><b>${esc(r.e.prenom)}</b> <span class="small muted">${esc(r.e.nom)} · ${hTxt(r.e.hebdo)}</span></td>${r.parSem.map((w) => `<td class="num">${c(w)}</td>`).join("")}<td class="num"><b>${c(r.tot)}</b></td><td class="num">${c(r.hc)}</td><td class="num">${c(r.hs25)}</td><td class="num">${c(r.hs50)}</td><td class="num">${c(r.fer)}</td><td class="num">${r.cp || "—"}</td><td class="num">${c(r.mal)}</td><td class="num">${c(r.ne)}</td></tr>`).join("")}
+    </tbody></table></div></div>`;
+}
+function imprimerPlanning(soc, L, jours, lignes) {
+  const w = window.open("", "_blank"); if (!w) { toast("Autorisez les fenêtres pour imprimer."); return; }
+  const nom = soc.enseigne || ENSEIGNES[soc.id] || soc.nom;
+  w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Planning ${esc(nom)} ${frDate(L)}</title><style>
+    body{font:12px system-ui,sans-serif;margin:16px;color:#111} h1{font-size:17px;margin:0 0 8px} table{border-collapse:collapse;width:100%} th,td{border:1px solid #999;padding:5px 6px;text-align:center;vertical-align:middle} th{background:#eee} td.n{text-align:left;white-space:nowrap} .cp{background:#ffd9a8}.mal{background:#ffc6f3}.ne{background:#ffc9c9} @page{size:landscape;margin:10mm}</style></head><body>
+    <h1>Planning ${esc(nom)} — semaine du ${frDate(L)} au ${frDate(plAdd(L, 6))}</h1>
+    <table><thead><tr><th>Salarié</th>${jours.map((d, i) => `<th>${JOURS_PL[i]} ${frDate(d).slice(0, 5)}</th>`).join("")}<th>Total</th></tr></thead><tbody>
+    ${lignes.map((l) => `<tr><td class="n"><b>${esc(l.e.prenom)} ${esc(l.e.nom)}</b></td>${l.cases.map((c) => `<td class="${c.r.cp ? "cp" : c.r.mal ? "mal" : c.r.ne ? "ne" : ""}">${c.hors ? "" : esc(c.r.txt || "repos")}</td>`).join("")}<td><b>${hTxt(l.w) || "0h"}</b></td></tr>`).join("")}
+    </tbody></table><script>window.onload=()=>window.print()<\/script></body></html>`);
+  w.document.close();
 }
 
 if (!window.supabase || !window.SUPABASE_URL || /REMPLACER/.test(window.SUPABASE_URL + window.SUPABASE_ANON_KEY)) {
