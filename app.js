@@ -21,7 +21,7 @@ function renderTabs() {
   const sd = typeof socDoc === "function" ? socDoc() : null;
   if (sd && sd.horsPaie) { tabs = tabs.filter(([k]) => ["rentab", "caisse", "stock", "archives", "societe", "equipe"].includes(k)); if (!tabs.some(([k]) => k === S.tab)) S.tab = tabs[0][0]; }
   $("#tabs").innerHTML = tabs.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}</button>`).join("");
-  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; S.gest = { caisse: {}, charges: {}, charge: {} }; S.arch = null; S.stk = null; render(); renderTabs(); };
+  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; S.gest = { caisse: {}, charges: {}, charge: {} }; S.arch = null; S.stk = null; S.facEdit = null; render(); renderTabs(); };
 }
 
 const socDoc = () => S.socs.find((x) => x.id === S.soc);
@@ -1361,7 +1361,7 @@ async function demarrerSession(u) {
 }
 
 /* ---------- Démarrage ---------- */
-$("#selSoc").onchange = (e) => { S.soc = e.target.value; store.set("paie.soc", S.soc); S.gest = { caisse: {}, charges: {}, charge: {} }; renderTabs(); resub(); };
+$("#selSoc").onchange = (e) => { S.facEdit = null; S.soc = e.target.value; store.set("paie.soc", S.soc); S.gest = { caisse: {}, charges: {}, charge: {} }; renderTabs(); resub(); };
 $("#selMois").onchange = (e) => { if (!e.target.value) return; S.mois = e.target.value; store.set("paie.mois", S.mois); resub(); };
 $("#logout").onclick = sortir;
 $("#monMdp").onclick = () => ecranNouveauMdp("Changer mon mot de passe", () => { S.profil = null; S.sessionUid = null; S.sb.auth.getSession().then(({ data }) => data.session ? demarrerSession(data.session.user) : ecranConnexion()); });
@@ -1542,7 +1542,7 @@ function renderCaisse(v) {
     </tbody></table></div>
     <p class="small muted" style="margin:0">Enregistrement automatique à chaque saisie.</p>
   </div>
-  <div class="panel"><h2>Déposer une facture</h2>
+  <div class="panel"><h2>${S.facEdit ? "Modifier la facture" : "Déposer une facture"}</h2>${S.facEdit ? `<p class="small" style="margin:0;color:var(--warn,#b45309)">Vous modifiez une facture déjà enregistrée. L'ancienne version est conservée dans l'historique de la facture. Joignez un fichier seulement pour remplacer la pièce : l'ancien fichier reste aux archives.</p>` : ""}
     <div class="form" id="facForm">
       <label style="grid-column:1/-1">Fichier (PDF ou photo) : les cases se remplissent automatiquement<input type="file" id="fac_fic" accept="image/*,application/pdf"></label>
       <div id="fac_etat" class="small" style="grid-column:1/-1" hidden></div>
@@ -1557,11 +1557,11 @@ function renderCaisse(v) {
       <label>Note<input id="fac_note" placeholder="facultatif"></label>
     </div>
     <p class="small muted" style="margin:0">Achats de marchandises et emballages : comptés au mois de la facture. Autres charges (loyer, électricité…) : réparties jour par jour sur la période couverte.</p>
-    <div class="row"><button class="primary" id="fac_ok">Enregistrer et archiver la facture</button></div>
+    <div class="row"><button class="primary" id="fac_ok">${S.facEdit ? "Enregistrer les modifications" : "Enregistrer et archiver la facture"}</button>${S.facEdit ? `<button id="fac_stop">Abandonner la modification</button>` : ""}</div>
     <h3>Factures prises en compte en ${esc(moisLib(S.mois).toLowerCase())} (${ch.length})</h3>
     <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Fournisseur</th><th>Catégorie</th><th class="num">HT</th><th></th></tr></thead><tbody>
-    ${ch.map((c) => `<tr><td>${esc(frDate(c.date))}</td><td>${esc(c.fournisseur || "")}${c.note ? `<div class="small muted">${esc(c.note)}</div>` : ""}</td><td class="small">${esc(catLib(c.categorie))}${!catVariable(c.categorie) && c.periodeDebut ? `<div class="muted">${esc(frDate(c.periodeDebut))} → ${esc(frDate(c.periodeFin))}</div>` : ""}</td><td class="num">${F(num(c.ht))}</td>
-      <td class="row" style="gap:6px;flex-wrap:nowrap">${c.fichier ? `<button class="link" data-facv="${esc(c.fichier)}">Voir</button>` : ""}${S.admin ? `<button class="link" data-facx="${esc(c.id)}" title="Retire la facture des calculs ; le fichier reste aux archives">Annuler</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Aucune facture pour ce mois.</td></tr>`}
+    ${ch.map((c) => `<tr><td>${esc(frDate(c.date))}</td><td>${esc(c.fournisseur || "")}${c.note ? `<div class="small muted">${esc(c.note)}</div>` : ""}</td><td class="small">${esc(catLib(c.categorie))}${!catVariable(c.categorie) && c.periodeDebut ? `<div class="muted">${esc(frDate(c.periodeDebut))} → ${esc(frDate(c.periodeFin))}</div>` : ""}</td><td class="num">${F(num(c.ht))}${(c.historique || []).length ? `<div class="small muted" title="Modifiée ${c.historique.length} fois">modifiée</div>` : ""}</td>
+      <td class="row" style="gap:6px;flex-wrap:nowrap">${c.fichier ? `<button class="link" data-facv="${esc(c.fichier)}">Voir</button>` : ""}<button class="link" data-face="${esc(c.id)}">Modifier</button>${S.admin ? `<button class="link" data-facx="${esc(c.id)}" title="Retire la facture des calculs ; le fichier reste aux archives">Annuler</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Aucune facture pour ce mois.</td></tr>`}
     </tbody></table></div>
   </div></div>`;
   lierCaisse(v, k, cx, tgc);
@@ -1605,8 +1605,19 @@ function lierCaisse(v, k, cx, tgc) {
       dire(`Analyse terminée (${mode}) : ${trouves.length ? trouves.join(", ") + " trouvés" : "rien de lisible"}. Vérifiez les cases surlignées avant d'enregistrer.${r.notes.length ? " " + r.notes.join(" ; ") + "." : ""}`, trouves.length >= 3 ? "" : "warn");
     } catch (err) { dire("Analyse impossible (" + (err.message || err) + ") : remplissez les cases à la main.", "warn"); }
   };
+  const enEdition = S.facEdit && (S.gest.charges[S.soc] || []).find((x) => x.id === S.facEdit);
+  if (S.facEdit && !enEdition) S.facEdit = null;
+  if (enEdition) {
+    const c0 = enEdition, pose = (id, val) => { const i = $("#" + id); if (i) { i.value = val ?? ""; i.dataset.touche = "1"; } };
+    pose("fac_four", c0.fournisseur); $("#fac_cat").value = c0.categorie || "autre"; $("#fac_cat").dataset.touche = "1"; $("#fac_cat").onchange({ target: $("#fac_cat") });
+    pose("fac_date", c0.date); pose("fac_ht", fmtMt(c0.ht)); pose("fac_ttc", c0.ttc ? fmtMt(c0.ttc) : ""); pose("fac_num", c0.numero); pose("fac_note", c0.note);
+    if (c0.periodeDebut) pose("fac_deb", c0.periodeDebut); if (c0.periodeFin) pose("fac_fin", c0.periodeFin);
+    $("#fac_stop").onclick = () => { S.facEdit = null; render(); };
+    setTimeout(() => { const f0 = $("#facForm"); if (f0) f0.scrollIntoView({ behavior: "smooth", block: "center" }); }, 50);
+  }
   $("#fac_ok").onclick = async (e) => {
     const b = e.target; let f = $("#fac_fic").files[0];
+    if (enEdition) return enregistrerModifFacture(enEdition, b, f);
     const c = { societe: S.soc, fournisseur: $("#fac_four").value.trim(), categorie: $("#fac_cat").value, date: $("#fac_date").value,
       ht: num(ht.value), ttc: num(ttc.value) || null, numero: $("#fac_num").value.trim(), note: $("#fac_note").value.trim(), par: S.profil.nom || "", le: new Date().toISOString() };
     if (!catVariable(c.categorie)) { c.periodeDebut = $("#fac_deb").value || `${S.mois}-01`; c.periodeFin = $("#fac_fin").value || finMoisDe(S.mois); if (c.periodeFin < c.periodeDebut) { toast("La fin de période précède le début."); return; } }
@@ -1633,6 +1644,7 @@ function lierCaisse(v, k, cx, tgc) {
     if (error) { if (w) w.close(); toast("Ouverture impossible : " + error.message); return; }
     if (w) w.location = data.signedUrl; else location.assign(data.signedUrl);
   }));
+  v.querySelectorAll("[data-face]").forEach((b) => (b.onclick = () => { S.facEdit = b.dataset.face; render(); }));
   v.querySelectorAll("[data-facx]").forEach((b) => (b.onclick = async () => {
     if (b.dataset.ok !== "1") { b.dataset.ok = "1"; b.textContent = "Confirmer ?"; return; }
     const c = (S.gest.charges[S.soc] || []).find((x) => x.id === b.dataset.facx); if (!c) return;
@@ -1642,6 +1654,30 @@ function lierCaisse(v, k, cx, tgc) {
       toast("Facture annulée : retirée des calculs, le fichier reste aux archives."); render();
     } catch (e) { toast("Annulation impossible : " + (e.message || e.code)); }
   }));
+}
+
+async function enregistrerModifFacture(c0, b, f) {
+  const ht = $("#fac_ht"), ttc = $("#fac_ttc");
+  const n = { fournisseur: $("#fac_four").value.trim(), categorie: $("#fac_cat").value, date: $("#fac_date").value, ht: num(ht.value), ttc: num(ttc.value) || null, numero: $("#fac_num").value.trim(), note: $("#fac_note").value.trim() };
+  if (!catVariable(n.categorie)) { n.periodeDebut = $("#fac_deb").value || `${(n.date || S.mois).slice(0, 7)}-01`; n.periodeFin = $("#fac_fin").value || finMoisDe((n.date || S.mois).slice(0, 7)); if (n.periodeFin < n.periodeDebut) { toast("La fin de période précède le début."); return; } }
+  else { n.periodeDebut = null; n.periodeFin = null; }
+  if (!n.date || !n.ht) { toast("Indiquez au moins la date et le montant HT."); return; }
+  const avant = {}; Object.keys(n).forEach((k) => { const a = c0[k] ?? null, z = n[k] ?? null; if (String(a ?? "") !== String(z ?? "")) avant[k] = a; });
+  if (!Object.keys(avant).length && !f) { toast("Aucune modification à enregistrer."); return; }
+  b.disabled = true; b.textContent = "Enregistrement…";
+  try {
+    if (f) {
+      f = await compresserImage(f);
+      const propre = f.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w.\-]+/g, "_").slice(-80);
+      const chemin = `${S.soc}/${n.date.slice(0, 7)}/${Date.now()}-${propre}`;
+      const { error } = await S.sb.storage.from("factures").upload(chemin, f, { contentType: f.type || "application/octet-stream" });
+      if (error) throw error; avant.fichier = c0.fichier || null; n.fichier = chemin;
+    }
+    const m = { ...n, historique: [...(c0.historique || []), { le: new Date().toISOString(), par: S.profil.nom || "", avant }], modifieeLe: new Date().toISOString(), modifieePar: S.profil.nom || "" };
+    await S.db.doc(`charges/${c0.id}`).update(m); Object.assign(c0, m);
+    if (S.arch && S.arch.liste) { const a = S.arch.liste.find((x) => x.id === c0.id); if (a) Object.assign(a, m); }
+    S.facEdit = null; toast("Facture modifiée. L'ancienne version reste dans son historique."); render();
+  } catch (e) { toast("Modification impossible : " + (e.message || e.code || e)); b.disabled = false; b.textContent = "Enregistrer les modifications"; }
 }
 
 /* ---------- Onglet « Archives comptables » : toutes les factures déposées, conservées 10 ans ---------- */
@@ -1677,7 +1713,7 @@ function renderArchivesCompta(v) {
       <label class="check small"><input type="checkbox" id="arAnn" ${F0.annulees ? "checked" : ""}> Afficher les annulées</label>
     </div>
     <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Restaurant</th><th>Fournisseur</th><th>N°</th><th>Catégorie</th><th class="num">HT</th><th class="num">TTC</th><th>Déposée par</th><th></th></tr></thead><tbody>
-    ${liste.map((c) => `<tr${c.annulee ? ' class="muted"' : ""}><td>${esc(frDate(c.date))}</td><td class="small">${esc(nomSoc(c.societe))}</td><td>${esc(c.fournisseur || "")}${c.annulee ? ' <span class="chip">annulée</span>' : ""}</td><td class="small">${esc(c.numero || "")}</td><td class="small">${esc(catLib(c.categorie))}</td><td class="num">${F(num(c.ht))}</td><td class="num">${c.ttc ? F(num(c.ttc)) : ""}</td><td class="small">${esc(c.par || "")}<div class="muted">${esc(frDate((c.le || "").slice(0, 10)))}</div></td><td>${c.fichier ? `<button class="link" data-arv="${esc(c.fichier)}">Ouvrir</button>` : '<span class="small muted">sans fichier</span>'}</td></tr>`).join("") || `<tr><td colspan="9" class="muted">Aucune facture pour ces critères.</td></tr>`}
+    ${liste.map((c) => `<tr${c.annulee ? ' class="muted"' : ""}><td>${esc(frDate(c.date))}</td><td class="small">${esc(nomSoc(c.societe))}</td><td>${esc(c.fournisseur || "")}${c.annulee ? ' <span class="chip">annulée</span>' : ""}</td><td class="small">${esc(c.numero || "")}</td><td class="small">${esc(catLib(c.categorie))}</td><td class="num">${F(num(c.ht))}</td><td class="num">${c.ttc ? F(num(c.ttc)) : ""}</td><td class="small">${esc(c.par || "")}<div class="muted">${esc(frDate((c.le || "").slice(0, 10)))}</div></td><td class="row" style="gap:6px;flex-wrap:nowrap">${c.fichier ? `<button class="link" data-arv="${esc(c.fichier)}">Ouvrir</button>` : '<span class="small muted">sans fichier</span>'}${c.annulee ? "" : `<button class="link" data-are="${esc(c.id)}">Modifier</button>`}</td></tr>`).join("") || `<tr><td colspan="9" class="muted">Aucune facture pour ces critères.</td></tr>`}
     <tr><td colspan="5"><b>Total (${liste.filter((c) => !c.annulee).length} facture(s))</b></td><td class="num"><b>${F(tot.ht)}</b></td><td class="num"><b>${F(tot.ttc)}</b></td><td colspan="2"></td></tr>
     </tbody></table></div>
     ${sansFichier ? `<p class="small muted" style="margin:0">${sansFichier} facture(s) sans fichier joint : pensez à les déposer pour votre comptable.</p>` : ""}
@@ -1687,6 +1723,13 @@ function renderArchivesCompta(v) {
   $("#arMois").onchange = (e) => maj("mois", e.target.value); $("#arCat").onchange = (e) => maj("cat", e.target.value);
   $("#arAnn").onchange = (e) => maj("annulees", e.target.checked);
   let tm; $("#arTxt").oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { maj("txt", e.target.value); const i = $("#arTxt"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 350); };
+  v.querySelectorAll("[data-are]").forEach((b) => (b.onclick = () => {
+    const c = (S.arch.liste || []).find((x) => x.id === b.dataset.are); if (!c) return;
+    const mois = (c.periodeDebut && !catVariable(c.categorie) ? c.periodeDebut : c.date || S.mois).slice(0, 7);
+    if (c.societe && c.societe !== S.soc) { S.soc = c.societe; $("#selSoc").value = c.societe; store.set("paie.soc", S.soc); }
+    S.gest = { caisse: {}, charges: {}, charge: {} }; S.mois = mois; $("#selMois").value = mois; store.set("paie.mois", mois);
+    S.facEdit = c.id; S.tab = "caisse"; renderTabs(); resub();
+  }));
   v.querySelectorAll("[data-arv]").forEach((b) => (b.onclick = async () => {
     const w = window.open("", "_blank");
     const { data, error } = await S.sb.storage.from("factures").createSignedUrl(b.dataset.arv, 120);

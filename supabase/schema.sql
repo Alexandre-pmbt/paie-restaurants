@@ -208,3 +208,5 @@ create policy charges_conservation on public.docs as restrictive for delete to a
 alter table docs drop constraint docs_collection_check;
 alter table docs add constraint docs_collection_check check (collection = any (array['societes','salaries','saisies','ajustements','clotures','documents','caisse','charges','stock']));
 -- docs_lecture / docs_creation / docs_modif : 'stock' traité comme 'caisse' (is_resp(data->>'societe') et societe = préfixe de l'id)
+
+-- Factures (charges) modifiables par l'admin et par les responsables de la société (hors factures annulées) ; historique des versions dans data.historique
