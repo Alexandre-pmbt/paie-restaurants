@@ -96,7 +96,7 @@ function appliquerMarque() {
 function render() {
   appliquerMarque();
   renderVue();
-  if (S.admin && S.profil && S.tab !== "equipe") insererAlertes($("#view"));
+  if (S.admin && S.profil && ["cafat", "bulletins", "contrats"].includes(S.tab)) insererAlertes($("#view"));
 }
 /* ---- Alertes : fins de CDD et de périodes d'essai, toutes sociétés ---- */
 function alertesContrats() {
