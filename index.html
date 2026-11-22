@@ -157,6 +157,9 @@ table.pl td{padding:3px 4px;vertical-align:top;min-width:92px} table.pl td:first
 .pl-on .pl-in{border-color:var(--accent,#2a6f97)} .pl-cp{background:#ffe7c2} .pl-mal{background:#ffd6f5} .pl-ne{background:#ffd3d0} .pl-err .pl-in{border-color:var(--bad);color:var(--bad)}
 .pl-hors{background:var(--soft)} th.pl-fer{color:var(--bad)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .pl-cp{background:#4a3410}:root:not([data-theme="light"]) .pl-mal{background:#4a1d43}:root:not([data-theme="light"]) .pl-ne{background:#4d1f1c}}
+
+.modal-fond{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:20;padding:16px}
+.modal{max-width:560px;width:100%;margin:0;max-height:90vh;overflow:auto}
 </style>
 </head>
 <body>
@@ -182,13 +185,13 @@ table.pl td{padding:3px 4px;vertical-align:top;min-width:92px} table.pl td:first
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="supabase-config.js?v=20261122a"></script>
-<script src="supa-db.js?v=20261122a"></script>
-<script src="core.js?v=20261122a"></script>
-<script src="contrats.js?v=20261122a"></script>
-<script src="docx.js?v=20261122a"></script>
-<script src="cafat.js?v=20261122a"></script>
-<script src="app.js?v=20261122a"></script>
+<script src="supabase-config.js?v=20261122b"></script>
+<script src="supa-db.js?v=20261122b"></script>
+<script src="core.js?v=20261122b"></script>
+<script src="contrats.js?v=20261122b"></script>
+<script src="docx.js?v=20261122b"></script>
+<script src="cafat.js?v=20261122b"></script>
+<script src="app.js?v=20261122b"></script>
 <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});</script>
 </body>
 </html>

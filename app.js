@@ -14,14 +14,14 @@ function defaultMois() { const d = new Date(); d.setDate(1); d.setMonth(d.getMon
 S.mois = store.get("paie.mois") || defaultMois();
 $("#selMois").value = S.mois;
 
-const TABS_ADMIN = [["rentab", "Rentabilité"], ["caisse", "Caisse & factures"], ["stock", "Stock"], ["archives", "Archives comptables"], ["planning", "Planning"], ["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
-const TABS_RESP = [["planning", "Planning"], ["saisie", "Saisie du mois"], ["caisse", "Caisse & factures"], ["stock", "Stock"], ["archives", "Archives comptables"]];
+const TABS_ADMIN = [["rentab", "Rentabilité"], ["caisse", "Caisse & factures"], ["dettes", "Dettes fournisseurs"], ["stock", "Stock"], ["archives", "Archives comptables"], ["planning", "Planning"], ["saisie", "Saisie du mois"], ["bulletins", "Bulletins"], ["contrats", "Contrats"], ["cafat", "CAFAT"], ["salaries", "Salariés"], ["societe", "Société"], ["equipe", "Équipe"]];
+const TABS_RESP = [["planning", "Planning"], ["saisie", "Saisie du mois"], ["caisse", "Caisse & factures"], ["dettes", "Dettes fournisseurs"], ["stock", "Stock"], ["archives", "Archives comptables"]];
 function renderTabs() {
   let tabs = S.admin ? TABS_ADMIN : TABS_RESP;
   const sd = typeof socDoc === "function" ? socDoc() : null;
-  if (sd && sd.horsPaie) { tabs = tabs.filter(([k]) => ["rentab", "caisse", "stock", "archives", "societe", "equipe"].includes(k)); if (!tabs.some(([k]) => k === S.tab)) S.tab = tabs[0][0]; }
+  if (sd && sd.horsPaie) { tabs = tabs.filter(([k]) => ["rentab", "caisse", "dettes", "stock", "archives", "societe", "equipe"].includes(k)); if (!tabs.some(([k]) => k === S.tab)) S.tab = tabs[0][0]; }
   $("#tabs").innerHTML = tabs.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}</button>`).join("");
-  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; S.gest = { caisse: {}, charges: {}, charge: {} }; S.arch = null; S.stk = null; S.facEdit = null; render(); renderTabs(); };
+  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; S.tab = b.dataset.tab; S.confirm = null; S.cfData = {}; S.cloCache = {}; S.gest = { caisse: {}, charges: {}, charge: {} }; S.arch = null; S.stk = null; S.facEdit = null; if (S.dt) S.dt.data = null; render(); renderTabs(); };
 }
 
 const socDoc = () => S.socs.find((x) => x.id === S.soc);
@@ -155,6 +155,7 @@ function renderVue() {
   if (!S.socs.length) { if (S.admin) return renderDemarrage(v); v.innerHTML = `<div class="empty">Aucune société ne vous est attribuée pour l'instant. Demandez au gérant de vous donner accès.</div>`; return; }
   if (S.tab === "saisie") return renderSaisie(v);
   if (S.tab === "planning") return renderPlanning(v);
+  if (S.tab === "dettes") return renderDettes(v);
   if (S.tab === "caisse") return renderCaisse(v);
   if (S.tab === "stock") return renderStock(v);
   if (S.tab === "archives") return renderArchivesCompta(v);
@@ -1558,6 +1559,8 @@ function renderCaisse(v) {
       <label>Période couverte : du<input id="fac_deb" type="date" value="${S.mois}-01"></label>
       <label>au<input id="fac_fin" type="date" value="${finMoisDe(S.mois)}"></label>
       <label>N° de facture<input id="fac_num" placeholder="facultatif"></label>
+      <label>Échéance de paiement<input id="fac_ech" type="date"></label>
+      <label class="check" style="align-self:end"><input type="checkbox" id="fac_reglee"> Déjà réglée</label>
       <label>Note<input id="fac_note" placeholder="facultatif"></label>
     </div>
     <p class="small muted" style="margin:0">Achats de marchandises et emballages : comptés au mois de la facture. Autres charges (loyer, électricité…) : réparties jour par jour sur la période couverte.</p>
@@ -1614,7 +1617,7 @@ function lierCaisse(v, k, cx, tgc) {
   if (enEdition) {
     const c0 = enEdition, pose = (id, val) => { const i = $("#" + id); if (i) { i.value = val ?? ""; i.dataset.touche = "1"; } };
     pose("fac_four", c0.fournisseur); $("#fac_cat").value = c0.categorie || "autre"; $("#fac_cat").dataset.touche = "1"; $("#fac_cat").onchange({ target: $("#fac_cat") });
-    pose("fac_date", c0.date); pose("fac_ht", fmtMt(c0.ht)); pose("fac_ttc", c0.ttc ? fmtMt(c0.ttc) : ""); pose("fac_num", c0.numero); pose("fac_note", c0.note);
+    pose("fac_date", c0.date); pose("fac_ht", fmtMt(c0.ht)); pose("fac_ttc", c0.ttc ? fmtMt(c0.ttc) : ""); pose("fac_num", c0.numero); pose("fac_note", c0.note); pose("fac_ech", c0.echeance); const rg = $("#fac_reglee"); if (rg) { rg.checked = !!c0.payee; rg.disabled = true; rg.title = "Paiements gérés dans l'onglet Dettes fournisseurs"; }
     if (c0.periodeDebut) pose("fac_deb", c0.periodeDebut); if (c0.periodeFin) pose("fac_fin", c0.periodeFin);
     $("#fac_stop").onclick = () => { S.facEdit = null; render(); };
     setTimeout(() => { const f0 = $("#facForm"); if (f0) f0.scrollIntoView({ behavior: "smooth", block: "center" }); }, 50);
@@ -1623,7 +1626,8 @@ function lierCaisse(v, k, cx, tgc) {
     const b = e.target; let f = $("#fac_fic").files[0];
     if (enEdition) return enregistrerModifFacture(enEdition, b, f);
     const c = { societe: S.soc, fournisseur: $("#fac_four").value.trim(), categorie: $("#fac_cat").value, date: $("#fac_date").value,
-      ht: num(ht.value), ttc: num(ttc.value) || null, numero: $("#fac_num").value.trim(), note: $("#fac_note").value.trim(), par: S.profil.nom || "", le: new Date().toISOString() };
+      ht: num(ht.value), ttc: num(ttc.value) || null, numero: $("#fac_num").value.trim(), note: $("#fac_note").value.trim(), par: S.profil.nom || "", le: new Date().toISOString(), echeance: $("#fac_ech").value || null };
+    if ($("#fac_reglee").checked) { c.payee = true; c.paiements = [{ le: c.date || today(), montant: num(ttc.value) || num(ht.value), mode: "", ref: "déclarée réglée au dépôt", par: S.profil.nom || "", saisiLe: new Date().toISOString() }]; }
     if (!catVariable(c.categorie)) { c.periodeDebut = $("#fac_deb").value || `${S.mois}-01`; c.periodeFin = $("#fac_fin").value || finMoisDe(S.mois); if (c.periodeFin < c.periodeDebut) { toast("La fin de période précède le début."); return; } }
     if (!c.date || !c.ht) { toast("Indiquez au moins la date et le montant HT."); return; }
     const doublon = (S.gest.charges[S.soc] || []).find((x) => !x.annulee && x.fournisseur && x.fournisseur === c.fournisseur && ((c.numero && x.numero === c.numero) || (x.date === c.date && num(x.ht) === c.ht)));
@@ -1662,7 +1666,7 @@ function lierCaisse(v, k, cx, tgc) {
 
 async function enregistrerModifFacture(c0, b, f) {
   const ht = $("#fac_ht"), ttc = $("#fac_ttc");
-  const n = { fournisseur: $("#fac_four").value.trim(), categorie: $("#fac_cat").value, date: $("#fac_date").value, ht: num(ht.value), ttc: num(ttc.value) || null, numero: $("#fac_num").value.trim(), note: $("#fac_note").value.trim() };
+  const n = { fournisseur: $("#fac_four").value.trim(), categorie: $("#fac_cat").value, date: $("#fac_date").value, ht: num(ht.value), ttc: num(ttc.value) || null, numero: $("#fac_num").value.trim(), note: $("#fac_note").value.trim(), echeance: $("#fac_ech").value || null };
   if (!catVariable(n.categorie)) { n.periodeDebut = $("#fac_deb").value || `${(n.date || S.mois).slice(0, 7)}-01`; n.periodeFin = $("#fac_fin").value || finMoisDe((n.date || S.mois).slice(0, 7)); if (n.periodeFin < n.periodeDebut) { toast("La fin de période précède le début."); return; } }
   else { n.periodeDebut = null; n.periodeFin = null; }
   if (!n.date || !n.ht) { toast("Indiquez au moins la date et le montant HT."); return; }
@@ -2294,6 +2298,148 @@ function imprimerPlanning(soc, L, jours, lignes) {
     ${lignes.map((l) => `<tr><td class="n"><b>${esc(l.e.prenom)} ${esc(l.e.nom)}</b></td>${l.cases.map((c) => `<td class="${c.r.cp ? "cp" : c.r.mal ? "mal" : c.r.ne ? "ne" : ""}">${c.hors ? "" : esc(c.r.txt || "repos")}</td>`).join("")}<td><b>${hTxt(l.w) || "0h"}</b></td></tr>`).join("")}
     </tbody></table><script>window.onload=()=>window.print()<\/script></body></html>`);
   w.document.close();
+}
+
+/* ---------- Dettes fournisseurs : factures à payer, échéances, paiements ---------- */
+const FOURN_SUIVIS = ["SERDIS", "NOUMEA SURGELES", "RABOT", "SULLIVAN", "BARGIBANT", "LE FROID", "GBNC", "NEWREST"];
+const MODES_PAIEMENT = ["Virement", "Chèque", "Prélèvement", "Espèces", "Carte", "Compensation"];
+function cleFourn(nom) {
+  let k = String(nom || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9 ]+/g, " ")
+    .replace(/\b(SARL|SAS|SASU|SA|EURL|SNC|NC|STE|SOCIETE|ETS|ETABLISSEMENTS|CIE|GROUPE)\b/g, " ").replace(/\s+/g, " ").trim();
+  const suivi = FOURN_SUIVIS.find((f) => k === f || k.startsWith(f + " ") || k.includes(" " + f) || k.replace(/ /g, "") === f.replace(/ /g, ""));
+  return suivi || k || "SANS FOURNISSEUR";
+}
+const montantFacture = (c) => num(c.ttc) || num(c.ht);
+const payeAu = (c, jour) => (c.paiements || []).filter((p) => !jour || (p.le || "") <= jour).reduce((a, p) => a + num(p.montant), 0);
+function delaiFourn(soc, cle) { const f = ((S.socs.find((x) => x.id === soc) || {}).fournisseurs || {})[cle]; return f && f.delai != null ? Number(f.delai) : 30; }
+const echeanceDe = (c) => c.echeance || plAdd(c.date, delaiFourn(c.societe, cleFourn(c.fournisseur)));
+S.dt = { tous: false, ouvert: null, data: null, jour: null };
+function chargerDettes(force) {
+  const cle = S.dt.tous ? "*" : S.soc;
+  if (!force && S.dt.data && S.dt.data.cle === cle) return;
+  S.dt.data = { cle, charge: true };
+  const q = S.dt.tous ? S.db.collection("charges").get() : S.db.collection("charges").where("societe", "==", S.soc).get();
+  q.then((r) => { S.dt.data = { cle, liste: r.docs.map((d) => ({ id: d.id, ...d.data() })).filter((c) => !c.annulee && c.date) }; if (S.tab === "dettes") render(); })
+   .catch((e) => { S.dt.data = { cle, erreur: e.message || String(e) }; if (S.tab === "dettes") render(); });
+}
+function dettesAu(liste, jour) {
+  const parF = {};
+  liste.forEach((c) => {
+    if (c.date > jour) return;
+    const du = Math.round(montantFacture(c) - payeAu(c, jour)); if (du <= 0) return;
+    const k = cleFourn(c.fournisseur), ech = echeanceDe(c), retard = Math.round((new Date(jour) - new Date(ech)) / 86400000);
+    const f = parF[k] = parF[k] || { cle: k, nom: k, factures: [], du: 0, echu: 0, sous7: 0, plusVieille: null, socs: new Set() };
+    if (FOURN_SUIVIS.includes(k)) f.nom = k; else if (c.fournisseur && f.nom === k) f.nom = c.fournisseur;
+    f.factures.push({ c, du, ech, retard }); f.du += du; f.socs.add(c.societe);
+    if (retard > 0) f.echu += du; else if (retard >= -7) f.sous7 += du;
+    if (!f.plusVieille || ech < f.plusVieille) f.plusVieille = ech;
+  });
+  return parF;
+}
+function courbeDettes(liste, jour) {
+  const pts = []; for (let i = 59; i >= 0; i--) { const d = plAdd(jour, -i); let t = 0; liste.forEach((c) => { if (c.date <= d) t += Math.max(0, montantFacture(c) - payeAu(c, d)); }); pts.push([d, Math.round(t)]); }
+  const max = Math.max(...pts.map((p) => p[1]), 1), W = 600, H = 90;
+  const xy = pts.map((p, i) => `${(i / (pts.length - 1) * W).toFixed(1)},${(H - 6 - p[1] / max * (H - 16)).toFixed(1)}`).join(" ");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:90px;display:block" role="img" aria-label="Évolution des dettes fournisseurs sur 60 jours">
+    <polyline points="0,${H} ${xy} ${W},${H}" fill="var(--soft)" stroke="none"/><polyline points="${xy}" fill="none" stroke="var(--accent,#0b6e78)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+    <div class="row small muted" style="justify-content:space-between"><span>${frDate(pts[0][0])} : ${F(pts[0][1])} F</span><span>max ${F(max)} F</span><span>${frDate(jour)} : ${F(pts[pts.length - 1][1])} F</span></div>`;
+}
+function renderDettes(v) {
+  chargerDettes();
+  const D = S.dt.data;
+  if (!D || D.charge) { v.innerHTML = `<div class="panel"><p class="muted">Chargement des factures…</p></div>`; return; }
+  if (D.erreur) { v.innerHTML = `<div class="panel">Lecture impossible : ${esc(D.erreur)}</div>`; return; }
+  const jour = S.dt.jour || today(), parF = dettesAu(D.liste, jour);
+  FOURN_SUIVIS.forEach((k) => { if (!parF[k]) parF[k] = { cle: k, nom: k, factures: [], du: 0, echu: 0, sous7: 0, plusVieille: null, socs: new Set() }; });
+  const fours = Object.values(parF).sort((a, b) => b.echu - a.echu || b.du - a.du || a.nom.localeCompare(b.nom));
+  const tot = fours.reduce((a, f) => a + f.du, 0), echu = fours.reduce((a, f) => a + f.echu, 0), s7 = fours.reduce((a, f) => a + f.sous7, 0), nf = fours.reduce((a, f) => a + f.factures.length, 0);
+  const socNom = (id) => (S.socs.find((x) => x.id === id) || {}).enseigne || ENSEIGNES[id] || id;
+  const noms = [...new Set([...FOURN_SUIVIS, ...D.liste.map((c) => c.fournisseur).filter(Boolean)])].sort();
+  v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Dettes fournisseurs · ${S.dt.tous ? "toutes les sociétés" : esc(socNom(S.soc))}</h2>
+      <label class="small">Situation au <input type="date" id="dtJour" value="${jour}"></label>
+      ${S.admin ? `<label class="check small"><input type="checkbox" id="dtTous" ${S.dt.tous ? "checked" : ""}> Toutes les sociétés</label>` : ""}</div>
+    <div class="kpis">
+      <div class="kpi"><b>${F(tot)}</b><span>Total dû aux fournisseurs (F TTC)</span></div>
+      <div class="kpi"><b class="${echu ? "neg" : "pos"}">${F(echu)}</b><span>Dont échu (en retard)</span></div>
+      <div class="kpi"><b>${F(s7)}</b><span>À payer dans les 7 jours</span></div>
+      <div class="kpi"><b>${nf}</b><span>Facture(s) non réglée(s)</span></div>
+    </div>
+    ${courbeDettes(D.liste, jour)}
+    <div class="tbl-wrap"><table><thead><tr><th>Fournisseur</th><th class="num">Factures</th><th class="num">Montant dû</th><th class="num">Dont échu</th><th>Plus ancienne échéance</th><th class="num">Délai (jours)</th><th></th></tr></thead><tbody>
+    ${fours.map((f) => { const retard = f.plusVieille ? Math.round((new Date(jour) - new Date(f.plusVieille)) / 86400000) : null; const ouvert = S.dt.ouvert === f.cle;
+      const socDelai = S.dt.tous ? null : S.soc;
+      return `<tr class="${f.echu ? "" : ""}"><td><b>${esc(f.nom)}</b>${S.dt.tous && f.socs.size ? `<div class="small muted">${[...f.socs].map(socNom).map(esc).join(", ")}</div>` : ""}</td>
+        <td class="num">${f.factures.length || "—"}</td><td class="num"><b>${f.du ? F(f.du) : "—"}</b></td>
+        <td class="num ${f.echu ? "neg" : ""}">${f.echu ? F(f.echu) : "—"}</td>
+        <td>${f.plusVieille ? `${frDate(f.plusVieille)} ${retard > 0 ? `<span class="chip bad">${retard} j de retard</span>` : retard >= -7 ? `<span class="chip warn">sous ${-retard} j</span>` : ""}` : '<span class="small muted">rien à payer</span>'}</td>
+        <td class="num">${socDelai && S.admin ? `<input type="number" min="0" step="1" data-delai="${esc(f.cle)}" value="${delaiFourn(socDelai, f.cle)}" style="width:4.5em;text-align:right">` : socDelai ? delaiFourn(socDelai, f.cle) : '<span class="small muted">par société</span>'}</td>
+        <td>${f.factures.length ? `<button class="link" data-dtf="${esc(f.cle)}">${ouvert ? "Masquer" : "Détail"}</button>` : ""}</td></tr>
+        ${ouvert ? `<tr><td colspan="7" style="background:var(--soft)"><table><thead><tr>${S.dt.tous ? "<th>Société</th>" : ""}<th>Facture</th><th>Date</th><th>Échéance</th><th class="num">Montant</th><th class="num">Déjà réglé</th><th class="num">Reste dû</th><th></th></tr></thead><tbody>
+          ${f.factures.sort((a, b) => a.ech.localeCompare(b.ech)).map((x) => `<tr>${S.dt.tous ? `<td>${esc(socNom(x.c.societe))}</td>` : ""}<td>${esc(x.c.numero || "sans n°")}${x.c.fichier ? ` <button class="link" data-dtv="${esc(x.c.fichier)}">voir</button>` : ""}</td><td>${frDate(x.c.date)}</td>
+            <td>${frDate(x.ech)}${x.retard > 0 ? ` <span class="chip bad">+${x.retard} j</span>` : ""}${x.c.echeance ? "" : '<div class="small muted">calculée</div>'}</td>
+            <td class="num">${F(montantFacture(x.c))}</td><td class="num">${payeAu(x.c, jour) ? F(payeAu(x.c, jour)) : "—"}</td><td class="num"><b>${F(x.du)}</b></td>
+            <td>${S.admin ? `<button class="link" data-dtp="${esc(x.c.id)}">Enregistrer un paiement</button>` : ""}</td></tr>`).join("")}
+        </tbody></table></td></tr>` : ""}`; }).join("")}
+    </tbody></table></div>
+    <p class="small muted" style="margin:0">Les dettes viennent des factures déposées dans « Caisse &amp; factures » ou saisies ci-dessous. L'échéance est celle de la facture, sinon la date de facture + le délai du fournisseur (30 jours par défaut, modifiable). Montants TTC.</p>
+  </div>
+  ${S.admin || S.profil ? `<div class="panel" id="dtAjout"><h2>Ajouter une facture fournisseur à payer</h2>
+    <datalist id="dtNoms">${noms.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
+    <div class="form">
+      ${S.dt.tous ? `<label>Société<select id="dt_soc">${S.socs.filter((x) => !x.horsPaie || true).map((x) => `<option value="${esc(x.id)}" ${x.id === S.soc ? "selected" : ""}>${esc(socNom(x.id))}</option>`).join("")}</select></label>` : ""}
+      <label>Fournisseur<input id="dt_four" list="dtNoms" placeholder="ex. Serdis"></label>
+      <label>N° de facture<input id="dt_num"></label>
+      <label>Date de la facture<input id="dt_date" type="date" value="${today()}"></label>
+      <label>Échéance<input id="dt_ech" type="date" placeholder="facultatif"></label>
+      <label>Montant TTC (F)<input id="dt_ttc" class="mt" inputmode="numeric"></label>
+      <label>Montant HT (F)<input id="dt_ht" class="mt" inputmode="numeric" placeholder="facultatif"></label>
+      <label>Catégorie<select id="dt_cat">${CATEGORIES.map(([k, l]) => `<option value="${k}" ${k === "marchandises" ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+      <label>Note<input id="dt_note" placeholder="facultatif"></label>
+    </div>
+    <div class="row"><button class="primary" id="dt_ok">Ajouter la facture</button><span class="small muted">Elle compte aussi dans la rentabilité du restaurant. Pour joindre le PDF, déposez plutôt la facture dans « Caisse &amp; factures ».</span></div></div>` : ""}`;
+  $("#dtJour").onchange = (e) => { S.dt.jour = e.target.value || null; render(); };
+  const t = $("#dtTous"); if (t) t.onchange = (e) => { S.dt.tous = e.target.checked; render(); };
+  v.querySelectorAll("[data-dtf]").forEach((b) => (b.onclick = () => { S.dt.ouvert = S.dt.ouvert === b.dataset.dtf ? null : b.dataset.dtf; render(); }));
+  v.querySelectorAll("[data-dtv]").forEach((b) => (b.onclick = async () => { const { data, error } = await S.sb.storage.from("factures").createSignedUrl(b.dataset.dtv, 300); if (error) toast("Fichier introuvable : " + error.message); else window.open(data.signedUrl, "_blank"); }));
+  v.querySelectorAll("[data-delai]").forEach((i) => (i.onchange = async () => {
+    const soc = socDoc(); const fr = { ...(soc.fournisseurs || {}) }; fr[i.dataset.delai] = { ...(fr[i.dataset.delai] || {}), delai: Math.max(0, Math.round(num(i.value))) };
+    try { await S.db.doc("societes/" + S.soc).update({ fournisseurs: fr }); soc.fournisseurs = fr; toast("Délai de paiement enregistré."); render(); } catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
+  }));
+  v.querySelectorAll("[data-dtp]").forEach((b) => (b.onclick = () => ouvrirPaiement(D.liste.find((c) => c.id === b.dataset.dtp))));
+  const ok = $("#dt_ok"); if (ok) ok.onclick = async () => {
+    const soc = S.dt.tous ? $("#dt_soc").value : S.soc, ttc = num($("#dt_ttc").value), ht = num($("#dt_ht").value) || ttc;
+    const c = { societe: soc, fournisseur: $("#dt_four").value.trim(), numero: $("#dt_num").value.trim(), date: $("#dt_date").value, echeance: $("#dt_ech").value || null, ttc, ht, categorie: $("#dt_cat").value, note: $("#dt_note").value.trim(), par: S.profil.nom || "", le: new Date().toISOString(), source: "dettes" };
+    if (!c.fournisseur || !c.date || !ttc) { toast("Indiquez le fournisseur, la date et le montant TTC."); return; }
+    if (!catVariable(c.categorie)) { c.periodeDebut = `${c.date.slice(0, 7)}-01`; c.periodeFin = finMoisDe(c.date.slice(0, 7)); }
+    if (!num($("#dt_ht").value)) c.note = (c.note ? c.note + " · " : "") + "HT non renseigné (TTC repris)";
+    ok.disabled = true;
+    try { const r = await S.db.collection("charges").add(c); D.liste.push({ id: r.id, ...c }); S.gest = { caisse: {}, charges: {}, charge: {} }; toast("Facture ajoutée aux dettes."); render(); }
+    catch (e) { toast("Ajout impossible : " + (e.message || e)); ok.disabled = false; }
+  };
+}
+function ouvrirPaiement(c) {
+  if (!c) return;
+  const reste = Math.round(montantFacture(c) - payeAu(c));
+  const dlg = document.createElement("div"); dlg.className = "modal-fond";
+  dlg.innerHTML = `<div class="panel modal" role="dialog" aria-label="Paiement de facture"><h2>Paiement · ${esc(c.fournisseur || "")}</h2>
+    <p class="small muted" style="margin:0">Facture ${esc(c.numero || "sans n°")} du ${frDate(c.date)} · montant ${F(montantFacture(c))} F · reste dû <b>${F(reste)} F</b></p>
+    <div class="form"><label>Montant payé (F)<input id="pm_mt" class="mt" inputmode="numeric" value="${fmtMt(reste)}"></label>
+      <label>Date du paiement<input id="pm_date" type="date" value="${today()}"></label>
+      <label>Mode<select id="pm_mode">${MODES_PAIEMENT.map((m) => `<option>${m}</option>`).join("")}</select></label>
+      <label>Référence<input id="pm_ref" placeholder="n° de chèque, virement…"></label></div>
+    ${(c.paiements || []).length ? `<p class="small" style="margin:0">Déjà enregistré : ${c.paiements.map((p) => `${F(num(p.montant))} F le ${frDate(p.le)} (${esc(p.mode || "")})`).join(" · ")}</p>` : ""}
+    <div class="row"><button class="primary" id="pm_ok">Enregistrer le paiement</button><button id="pm_ko">Annuler</button></div></div>`;
+  document.body.appendChild(dlg);
+  const fermer = () => dlg.remove(); dlg.querySelector("#pm_ko").onclick = fermer; dlg.onclick = (e) => { if (e.target === dlg) fermer(); };
+  dlg.querySelector("#pm_ok").onclick = async () => {
+    const mt = num(dlg.querySelector("#pm_mt").value), le = dlg.querySelector("#pm_date").value;
+    if (!mt || !le) { toast("Indiquez le montant et la date."); return; }
+    if (mt > reste + 1 && !confirm(`Le montant dépasse le reste dû (${F(reste)} F). Enregistrer quand même ?`)) return;
+    const paiements = [...(c.paiements || []), { le, montant: mt, mode: dlg.querySelector("#pm_mode").value, ref: dlg.querySelector("#pm_ref").value.trim(), par: S.profil.nom || "", saisiLe: new Date().toISOString() }];
+    const payee = paiements.reduce((a, p) => a + num(p.montant), 0) >= montantFacture(c) - 1;
+    try { await S.db.doc("charges/" + c.id).update({ paiements, payee }); c.paiements = paiements; c.payee = payee; fermer(); toast(payee ? "Facture soldée." : "Paiement partiel enregistré."); render(); }
+    catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
+  };
 }
 
 if (!window.supabase || !window.SUPABASE_URL || /REMPLACER/.test(window.SUPABASE_URL + window.SUPABASE_ANON_KEY)) {
