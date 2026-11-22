@@ -2303,10 +2303,13 @@ function imprimerPlanning(soc, L, jours, lignes) {
 /* ---------- Dettes fournisseurs : factures à payer, échéances, paiements ---------- */
 const FOURN_SUIVIS = ["SERDIS", "NOUMEA SURGELES", "RABOT", "SULLIVAN", "BARGIBANT", "LE FROID", "GBNC", "NEWREST"];
 const MODES_PAIEMENT = ["Virement", "Chèque", "Prélèvement", "Espèces", "Carte", "Compensation"];
+const suivisDe = (soc) => { const x = (S.socs.find((y) => y.id === soc) || {}).fournisseursSuivis; return Array.isArray(x) ? x : FOURN_SUIVIS; };
+const tousSuivis = () => [...new Set(S.socs.flatMap((x) => suivisDe(x.id)))];
+const normFourn = (nom) => String(nom || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9 ]+/g, " ")
+  .replace(/\b(SARL|SAS|SASU|SA|EURL|SNC|NC|STE|SOCIETE|ETS|ETABLISSEMENTS|CIE|GROUPE)\b/g, " ").replace(/\s+/g, " ").trim();
 function cleFourn(nom) {
-  let k = String(nom || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9 ]+/g, " ")
-    .replace(/\b(SARL|SAS|SASU|SA|EURL|SNC|NC|STE|SOCIETE|ETS|ETABLISSEMENTS|CIE|GROUPE)\b/g, " ").replace(/\s+/g, " ").trim();
-  const suivi = FOURN_SUIVIS.find((f) => k === f || k.startsWith(f + " ") || k.includes(" " + f) || k.replace(/ /g, "") === f.replace(/ /g, ""));
+  const k = normFourn(nom);
+  const suivi = tousSuivis().find((f) => k === f || k.startsWith(f + " ") || k.includes(" " + f) || k.replace(/ /g, "") === f.replace(/ /g, ""));
   return suivi || k || "SANS FOURNISSEUR";
 }
 const montantFacture = (c) => num(c.ttc) || num(c.ht);
@@ -2329,7 +2332,7 @@ function dettesAu(liste, jour) {
     const du = Math.round(montantFacture(c) - payeAu(c, jour)); if (du <= 0) return;
     const k = cleFourn(c.fournisseur), ech = echeanceDe(c), retard = Math.round((new Date(jour) - new Date(ech)) / 86400000);
     const f = parF[k] = parF[k] || { cle: k, nom: k, factures: [], du: 0, echu: 0, sous7: 0, plusVieille: null, socs: new Set() };
-    if (FOURN_SUIVIS.includes(k)) f.nom = k; else if (c.fournisseur && f.nom === k) f.nom = c.fournisseur;
+    if (tousSuivis().includes(k)) f.nom = k; else if (c.fournisseur && f.nom === k) f.nom = c.fournisseur;
     f.factures.push({ c, du, ech, retard }); f.du += du; f.socs.add(c.societe);
     if (retard > 0) f.echu += du; else if (retard >= -7) f.sous7 += du;
     if (!f.plusVieille || ech < f.plusVieille) f.plusVieille = ech;
@@ -2350,11 +2353,12 @@ function renderDettes(v) {
   if (!D || D.charge) { v.innerHTML = `<div class="panel"><p class="muted">Chargement des factures…</p></div>`; return; }
   if (D.erreur) { v.innerHTML = `<div class="panel">Lecture impossible : ${esc(D.erreur)}</div>`; return; }
   const jour = S.dt.jour || today(), parF = dettesAu(D.liste, jour);
-  FOURN_SUIVIS.forEach((k) => { if (!parF[k]) parF[k] = { cle: k, nom: k, factures: [], du: 0, echu: 0, sous7: 0, plusVieille: null, socs: new Set() }; });
+  const suivisVue = S.dt.tous ? tousSuivis() : suivisDe(S.soc);
+  suivisVue.forEach((k) => { if (!parF[k]) parF[k] = { cle: k, nom: k, factures: [], du: 0, echu: 0, sous7: 0, plusVieille: null, socs: new Set() }; });
   const fours = Object.values(parF).sort((a, b) => b.echu - a.echu || b.du - a.du || a.nom.localeCompare(b.nom));
   const tot = fours.reduce((a, f) => a + f.du, 0), echu = fours.reduce((a, f) => a + f.echu, 0), s7 = fours.reduce((a, f) => a + f.sous7, 0), nf = fours.reduce((a, f) => a + f.factures.length, 0);
   const socNom = (id) => (S.socs.find((x) => x.id === id) || {}).enseigne || ENSEIGNES[id] || id;
-  const noms = [...new Set([...FOURN_SUIVIS, ...D.liste.map((c) => c.fournisseur).filter(Boolean)])].sort();
+  const noms = [...new Set([...suivisVue, ...D.liste.map((c) => c.fournisseur).filter(Boolean)])].sort();
   v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Dettes fournisseurs · ${S.dt.tous ? "toutes les sociétés" : esc(socNom(S.soc))}</h2>
       <label class="small">Situation au <input type="date" id="dtJour" value="${jour}"></label>
       ${S.admin ? `<label class="check small"><input type="checkbox" id="dtTous" ${S.dt.tous ? "checked" : ""}> Toutes les sociétés</label>` : ""}</div>
@@ -2365,7 +2369,7 @@ function renderDettes(v) {
       <div class="kpi"><b>${nf}</b><span>Facture(s) non réglée(s)</span></div>
     </div>
     ${courbeDettes(D.liste, jour)}
-    <div class="tbl-wrap"><table><thead><tr><th>Fournisseur</th><th class="num">Factures</th><th class="num">Montant dû</th><th class="num">Dont échu</th><th>Plus ancienne échéance</th><th class="num">Délai (jours)</th><th></th></tr></thead><tbody>
+    <div class="tbl-wrap"><table><thead><tr><th>Fournisseur</th><th class="num">Factures</th><th class="num">Montant dû</th><th class="num">Dont échu</th><th>Plus ancienne échéance</th><th class="num">Délai (jours)</th><th></th>${S.admin && !S.dt.tous ? "<th></th>" : ""}</tr></thead><tbody>
     ${fours.map((f) => { const retard = f.plusVieille ? Math.round((new Date(jour) - new Date(f.plusVieille)) / 86400000) : null; const ouvert = S.dt.ouvert === f.cle;
       const socDelai = S.dt.tous ? null : S.soc;
       return `<tr class="${f.echu ? "" : ""}"><td><b>${esc(f.nom)}</b>${S.dt.tous && f.socs.size ? `<div class="small muted">${[...f.socs].map(socNom).map(esc).join(", ")}</div>` : ""}</td>
@@ -2373,14 +2377,15 @@ function renderDettes(v) {
         <td class="num ${f.echu ? "neg" : ""}">${f.echu ? F(f.echu) : "—"}</td>
         <td>${f.plusVieille ? `${frDate(f.plusVieille)} ${retard > 0 ? `<span class="chip bad">${retard} j de retard</span>` : retard >= -7 ? `<span class="chip warn">sous ${-retard} j</span>` : ""}` : '<span class="small muted">rien à payer</span>'}</td>
         <td class="num">${socDelai && S.admin ? `<input type="number" min="0" step="1" data-delai="${esc(f.cle)}" value="${delaiFourn(socDelai, f.cle)}" style="width:4.5em;text-align:right">` : socDelai ? delaiFourn(socDelai, f.cle) : '<span class="small muted">par société</span>'}</td>
-        <td>${f.factures.length ? `<button class="link" data-dtf="${esc(f.cle)}">${ouvert ? "Masquer" : "Détail"}</button>` : ""}</td></tr>
-        ${ouvert ? `<tr><td colspan="7" style="background:var(--soft)"><table><thead><tr>${S.dt.tous ? "<th>Société</th>" : ""}<th>Facture</th><th>Date</th><th>Échéance</th><th class="num">Montant</th><th class="num">Déjà réglé</th><th class="num">Reste dû</th><th></th></tr></thead><tbody>
+        <td>${f.factures.length ? `<button class="link" data-dtf="${esc(f.cle)}">${ouvert ? "Masquer" : "Détail"}</button>` : ""}</td>${S.admin && !S.dt.tous ? `<td>${suivisDe(S.soc).includes(f.cle) ? `<button class="link" data-dtsup="${esc(f.cle)}" title="Retirer de la liste des fournisseurs suivis">Retirer</button>` : ""}</td>` : ""}</tr>
+        ${ouvert ? `<tr><td colspan="8" style="background:var(--soft)"><table><thead><tr>${S.dt.tous ? "<th>Société</th>" : ""}<th>Facture</th><th>Date</th><th>Échéance</th><th class="num">Montant</th><th class="num">Déjà réglé</th><th class="num">Reste dû</th><th></th></tr></thead><tbody>
           ${f.factures.sort((a, b) => a.ech.localeCompare(b.ech)).map((x) => `<tr>${S.dt.tous ? `<td>${esc(socNom(x.c.societe))}</td>` : ""}<td>${esc(x.c.numero || "sans n°")}${x.c.fichier ? ` <button class="link" data-dtv="${esc(x.c.fichier)}">voir</button>` : ""}</td><td>${frDate(x.c.date)}</td>
             <td>${frDate(x.ech)}${x.retard > 0 ? ` <span class="chip bad">+${x.retard} j</span>` : ""}${x.c.echeance ? "" : '<div class="small muted">calculée</div>'}</td>
             <td class="num">${F(montantFacture(x.c))}</td><td class="num">${payeAu(x.c, jour) ? F(payeAu(x.c, jour)) : "—"}</td><td class="num"><b>${F(x.du)}</b></td>
             <td>${S.admin ? `<button class="link" data-dtp="${esc(x.c.id)}">Enregistrer un paiement</button>` : ""}</td></tr>`).join("")}
         </tbody></table></td></tr>` : ""}`; }).join("")}
     </tbody></table></div>
+    ${S.admin && !S.dt.tous ? `<div class="row" style="flex-wrap:wrap"><input id="dtNouv" placeholder="Nom du fournisseur à suivre" style="width:16em"><button id="dtAjF">+ Ajouter le fournisseur</button><span class="small muted">Un fournisseur suivi reste affiché même sans dette. Un fournisseur retiré réapparaît tant qu'il a des factures impayées.</span></div>` : ""}
     <p class="small muted" style="margin:0">Les dettes viennent des factures déposées dans « Caisse &amp; factures » ou saisies ci-dessous. L'échéance est celle de la facture, sinon la date de facture + le délai du fournisseur (30 jours par défaut, modifiable). Montants TTC.</p>
   </div>
   ${S.admin || S.profil ? `<div class="panel" id="dtAjout"><h2>Ajouter une facture fournisseur à payer</h2>
@@ -2405,6 +2410,16 @@ function renderDettes(v) {
     const soc = socDoc(); const fr = { ...(soc.fournisseurs || {}) }; fr[i.dataset.delai] = { ...(fr[i.dataset.delai] || {}), delai: Math.max(0, Math.round(num(i.value))) };
     try { await S.db.doc("societes/" + S.soc).update({ fournisseurs: fr }); soc.fournisseurs = fr; toast("Délai de paiement enregistré."); render(); } catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
   }));
+  const majSuivis = async (liste, msg) => { const soc = socDoc();
+    try { await S.db.doc("societes/" + S.soc).update({ fournisseursSuivis: liste }); soc.fournisseursSuivis = liste; toast(msg); render(); } catch (e) { toast("Enregistrement impossible : " + (e.message || e)); } };
+  const aj = $("#dtAjF"); if (aj) aj.onclick = () => { const k = normFourn($("#dtNouv").value); if (!k) { toast("Indiquez le nom du fournisseur."); return; }
+    const l = suivisDe(S.soc); if (l.includes(k)) { toast("Ce fournisseur est déjà suivi."); return; } majSuivis([...l, k].sort(), `${k} ajouté aux fournisseurs suivis.`); };
+  const ni = $("#dtNouv"); if (ni) ni.onkeydown = (e) => { if (e.key === "Enter") aj.onclick(); };
+  v.querySelectorAll("[data-dtsup]").forEach((b) => (b.onclick = () => { const k = b.dataset.dtsup, f = parF[k];
+    if (!confirm(`Retirer ${k} de la liste des fournisseurs suivis ?${f && f.du ? `
+
+Il reste ${F(f.du)} F de factures impayées : elles restent comptées et le fournisseur restera affiché tant qu'elles ne sont pas réglées.` : ""}`)) return;
+    majSuivis(suivisDe(S.soc).filter((x) => x !== k), `${k} retiré des fournisseurs suivis.`); }));
   v.querySelectorAll("[data-dtp]").forEach((b) => (b.onclick = () => ouvrirPaiement(D.liste.find((c) => c.id === b.dataset.dtp))));
   const ok = $("#dt_ok"); if (ok) ok.onclick = async () => {
     const soc = S.dt.tous ? $("#dt_soc").value : S.soc, ttc = num($("#dt_ttc").value), ht = num($("#dt_ht").value) || ttc;
