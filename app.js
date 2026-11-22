@@ -98,12 +98,13 @@ function render() {
   renderVue();
   if (S.admin && S.profil && ["cafat", "bulletins", "contrats"].includes(S.tab)) insererAlertes($("#view"));
 }
-/* ---- Alertes : fins de CDD et de périodes d'essai, toutes sociétés ---- */
+/* ---- Alertes : fins de CDD et de périodes d'essai, pour la société sélectionnée ---- */
 function alertesContrats() {
   const auj = today(), jours = (d) => Math.round((new Date(d + "T00:00:00Z") - new Date(auj + "T00:00:00Z")) / 86400000);
   const nomSoc = (id) => (S.socs.find((x) => x.id === id) || {}).nom || id;
   const out = [];
   for (const s of S.tous || []) {
+    if (s.societe !== S.soc) continue;
     if (s.statut === "futur") continue;
     const qui = `${s.prenom || ""} ${s.nom || ""}`.trim(), soc = nomSoc(s.societe);
     if (s.sortie && s.sortie <= auj && s.sortie >= "2026-09-01" && !s.sortieCafat) {
