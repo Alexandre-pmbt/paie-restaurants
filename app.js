@@ -2314,6 +2314,7 @@ function cleFourn(nom) {
 }
 const montantFacture = (c) => num(c.ttc) || num(c.ht);
 const payeAu = (c, jour) => (c.paiements || []).filter((p) => !jour || (p.le || "") <= jour).reduce((a, p) => a + num(p.montant), 0);
+const infoFourn = (soc, cle) => ((S.socs.find((x) => x.id === soc) || {}).fournisseurs || {})[cle] || {};
 function delaiFourn(soc, cle) { const f = ((S.socs.find((x) => x.id === soc) || {}).fournisseurs || {})[cle]; return f && f.delai != null ? Number(f.delai) : 30; }
 const echeanceDe = (c) => c.echeance || plAdd(c.date, delaiFourn(c.societe, cleFourn(c.fournisseur)));
 S.dt = { tous: false, ouvert: null, data: null, jour: null };
@@ -2378,6 +2379,11 @@ function renderDettes(v) {
         <td>${f.plusVieille ? `${frDate(f.plusVieille)} ${retard > 0 ? `<span class="chip bad">${retard} j de retard</span>` : retard >= -7 ? `<span class="chip warn">sous ${-retard} j</span>` : ""}` : '<span class="small muted">rien à payer</span>'}</td>
         <td class="num">${socDelai && S.admin ? `<input type="number" min="0" step="1" data-delai="${esc(f.cle)}" value="${delaiFourn(socDelai, f.cle)}" style="width:4.5em;text-align:right">` : socDelai ? delaiFourn(socDelai, f.cle) : '<span class="small muted">par société</span>'}</td>
         <td>${f.factures.length ? `<button class="link" data-dtf="${esc(f.cle)}">${ouvert ? "Masquer" : "Détail"}</button>` : ""}</td>${S.admin && !S.dt.tous ? `<td>${suivisDe(S.soc).includes(f.cle) ? `<button class="link" data-dtsup="${esc(f.cle)}" title="Retirer de la liste des fournisseurs suivis">Retirer</button>` : ""}</td>` : ""}</tr>
+        ${(() => { const inf = infoFourn(S.dt.tous ? [...f.socs][0] || S.soc : S.soc, f.cle), ed = S.admin && !S.dt.tous;
+          return `<tr class="dt-info"><td colspan="${S.admin && !S.dt.tous ? 8 : 7}"><div class="row" style="flex-wrap:wrap;gap:8px 18px;align-items:center">
+            <label class="small" style="flex:2 1 320px;display:flex;gap:6px;align-items:center;margin:0">Produits commandés ici ${ed ? `<input data-dtinfo="produits" data-f="${esc(f.cle)}" value="${esc(inf.produits || "")}" placeholder="ex. viande, frites surgelées, sauces…" style="flex:1">` : `<span>${esc(inf.produits || "—")}</span>`}</label>
+            <label class="small" style="flex:1 1 240px;display:flex;gap:6px;align-items:center;margin:0">E-mail du contact ${ed ? `<input type="email" data-dtinfo="email" data-f="${esc(f.cle)}" value="${esc(inf.email || "")}" placeholder="commandes@fournisseur.nc" style="flex:1">` : ""}${inf.email ? `<a href="mailto:${esc(inf.email)}" title="Écrire au fournisseur">${ed ? "✉" : esc(inf.email)}</a>` : ed ? "" : "<span>—</span>"}</label>
+          </div></td></tr>`; })()}
         ${ouvert ? `<tr><td colspan="8" style="background:var(--soft)"><table><thead><tr>${S.dt.tous ? "<th>Société</th>" : ""}<th>Facture</th><th>Date</th><th>Échéance</th><th class="num">Montant</th><th class="num">Déjà réglé</th><th class="num">Reste dû</th><th></th></tr></thead><tbody>
           ${f.factures.sort((a, b) => a.ech.localeCompare(b.ech)).map((x) => `<tr>${S.dt.tous ? `<td>${esc(socNom(x.c.societe))}</td>` : ""}<td>${esc(x.c.numero || "sans n°")}${x.c.fichier ? ` <button class="link" data-dtv="${esc(x.c.fichier)}">voir</button>` : ""}</td><td>${frDate(x.c.date)}</td>
             <td>${frDate(x.ech)}${x.retard > 0 ? ` <span class="chip bad">+${x.retard} j</span>` : ""}${x.c.echeance ? "" : '<div class="small muted">calculée</div>'}</td>
@@ -2406,6 +2412,12 @@ function renderDettes(v) {
   const t = $("#dtTous"); if (t) t.onchange = (e) => { S.dt.tous = e.target.checked; render(); };
   v.querySelectorAll("[data-dtf]").forEach((b) => (b.onclick = () => { S.dt.ouvert = S.dt.ouvert === b.dataset.dtf ? null : b.dataset.dtf; render(); }));
   v.querySelectorAll("[data-dtv]").forEach((b) => (b.onclick = async () => { const { data, error } = await S.sb.storage.from("factures").createSignedUrl(b.dataset.dtv, 300); if (error) toast("Fichier introuvable : " + error.message); else window.open(data.signedUrl, "_blank"); }));
+  v.querySelectorAll("[data-dtinfo]").forEach((i) => (i.onchange = async () => {
+    const champ = i.dataset.dtinfo, val = i.value.trim();
+    if (champ === "email" && val && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { toast("Adresse e-mail invalide."); return; }
+    const soc = socDoc(); const fr = { ...(soc.fournisseurs || {}) }; fr[i.dataset.f] = { ...(fr[i.dataset.f] || {}), [champ]: val };
+    try { await S.db.doc("societes/" + S.soc).update({ fournisseurs: fr }); soc.fournisseurs = fr; toast(champ === "email" ? "E-mail du contact enregistré." : "Produits enregistrés."); const y = window.scrollY; render(); window.scrollTo(0, y); } catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
+  }));
   v.querySelectorAll("[data-delai]").forEach((i) => (i.onchange = async () => {
     const soc = socDoc(); const fr = { ...(soc.fournisseurs || {}) }; fr[i.dataset.delai] = { ...(fr[i.dataset.delai] || {}), delai: Math.max(0, Math.round(num(i.value))) };
     try { await S.db.doc("societes/" + S.soc).update({ fournisseurs: fr }); soc.fournisseurs = fr; toast("Délai de paiement enregistré."); render(); } catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
