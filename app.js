@@ -1825,7 +1825,7 @@ function renderRentab(v) {
     <line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="var(--line,#ccd)"/>
     ${r.lignes.map((l, i) => { const h = Math.abs(l.res) / max * (H / 2 - 6); return `<rect x="${i * bw + 1}" y="${l.res >= 0 ? H / 2 - h : H / 2}" width="${Math.max(1, bw - 2)}" height="${h}" fill="${l.res >= 0 ? "#2f8f5b" : "#c0392b"}" opacity="${l.saisi ? 1 : 0.35}"><title>${frDate(l.d)} : ${F(Math.round(l.res))} F</title></rect>`; }).join("")}
   </svg>`;
-  v.innerHTML = `<div class="panel"><div class="row"><h2 class="grow">Rentabilité · ${esc(soc.enseigne || ENSEIGNES[soc.id] || soc.nom)} · ${esc(moisLib(S.mois).toLowerCase())}</h2></div>
+  v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Rentabilité · ${esc(soc.enseigne || ENSEIGNES[soc.id] || soc.nom)} · ${esc(moisLib(S.mois).toLowerCase())}</h2><button class="primary" id="rbBanque" title="État de gestion des derniers mois et projection, à imprimer ou enregistrer en PDF">🖨 Imprimer un état pour la banque</button></div>
     <div class="kpis">
       ${kpi("Résultat du dernier jour saisi", hier ? F(Math.round(hier.res)) + " F" : "—", hier ? frDate(hier.d) + " · CA HT " + F(Math.round(hier.ca)) + " F" : "aucun CA saisi", hier ? cls(hier.res) : "")}
       ${kpi("Résultat cumulé du mois", F(Math.round(t.res)) + " F", `sur ${r.lignes.length} jour(s)`, cls(t.res))}
@@ -1861,6 +1861,7 @@ function renderRentab(v) {
     <div class="row"><button class="link" id="cfAdd">+ Ajouter une charge fixe</button><span class="small muted grow">Comptées chaque jour à raison de 1/30e environ (montant ÷ nombre de jours du mois). Ne saisissez pas en plus les factures correspondantes.</span></div>
     <div class="row"><button class="primary" id="rbSave">Enregistrer les paramètres</button><span class="small muted grow">Si la redevance est facturée chaque mois, saisissez plutôt la facture (catégorie « Redevances ») et laissez ce taux vide.</span></div>
   </div>`;
+  $("#rbBanque").onclick = ouvrirRapportBanque;
   $("#cfAdd").onclick = () => { const tb = $("#cfTab tbody"); tb.insertAdjacentHTML("beforeend", ligneCF({ lib: "", cat: "autres", montant: "" }, tb.children.length)); lierCF(); };
   lierCF();
   $("#rbSave").onclick = async () => {
@@ -2508,6 +2509,194 @@ function ouvrirPaiement(c) {
     try { await S.db.doc("charges/" + c.id).update({ paiements, payee }); c.paiements = paiements; c.payee = payee; fermer(); toast(payee ? "Facture soldée." : "Paiement partiel enregistré."); render(); }
     catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
   };
+}
+
+/* ---------- État de gestion pour la banque : historique 3/6 mois + projection, imprimable ---------- */
+const moisDecaleR = (m, n) => { const [y, mm] = m.split("-").map(Number); return new Date(Date.UTC(y, mm - 1 + n, 1)).toISOString().slice(0, 7); };
+const moisCourt = (m) => { const [y, mm] = m.split("-"); return ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."][Number(mm) - 1] + " " + y.slice(2); };
+async function chargerRapport(soc, mois) {
+  const id = soc.id, g = (c, k) => S.db.doc(`${c}/${k}`).get().then((d) => (d.exists ? d.data() : null)).catch(() => null);
+  const [charges, ...par] = await Promise.all([
+    S.db.collection("charges").where("societe", "==", id).get().then((q) => q.docs.map((d) => ({ id: d.id, ...d.data() }))).catch(() => []),
+    ...mois.map((m) => Promise.all([g("caisse", `${id}_${m}`), g("clotures", `${id}_${m}`), g("documents", `hist_${id}_${m}`), g("saisies", `${id}_${m}`), g("ajustements", `${id}_${m}`)]))]);
+  const out = {}; mois.forEach((m, i) => { const [caisse, clo, hist, saisie, ajust] = par[i]; out[m] = { caisse, clo, hist, saisie, ajust }; });
+  return { charges: charges.filter((c) => !c.annulee), mois: out };
+}
+function masseDuMois(soc, m, d) {
+  if (soc.horsPaie || num(soc.masseManuelle)) return { v: num(soc.masseManuelle), src: "montant mensuel saisi", est: false };
+  if (d.clo && d.clo.bulletins) return { v: d.clo.bulletins.reduce((a, x) => a + (x.b.cout || 0), 0), src: "paie clôturée" };
+  const deb = m + "-01", fin = finMoisDe(m);
+  const sals = (S.salaries || []).filter((s) => s.societe === soc.id && s.statut !== "futur" && !(s.statut === "archive" && !s.sortie) && (!s.entree || s.entree <= fin) && (!s.sortie || s.sortie >= deb));
+  const calc = () => sals.reduce((a, s) => {
+    const sv = (d.saisie && d.saisie.variables) || {}, noms = (s.planningNoms && s.planningNoms.length ? s.planningNoms : [s.prenom]).map(PAIE.normNom);
+    let repas = 0, acompte = 0; for (const k of noms) if (sv[k]) { repas += Number(sv[k].repas) || 0; acompte += Number(sv[k].acompte) || 0; }
+    const plan = d.saisie && d.saisie.planning ? PAIE.planPour(d.saisie.planning, s.planningNoms && s.planningNoms.length ? s.planningNoms : [s.prenom]) : null;
+    try { const b = PAIE.calcul(soc, s, plan, { repas, acompte, ...((d.ajust && d.ajust.par && d.ajust.par[s.id]) || {}) }, m); return { cout: a.cout + (b.cout || 0), brut: a.brut + (b.brut || 0) }; } catch (e) { return a; }
+  }, { cout: 0, brut: 0 });
+  if (d.hist && d.hist.lignes) {
+    const brut = Object.values(d.hist.lignes).reduce((a, l) => a + num(l.brut), 0), c = calc(), ratio = c.brut ? c.cout / c.brut : 1.4;
+    return { v: brut * ratio, src: "bulletins de l'ancien prestataire (charges patronales estimées)", est: true };
+  }
+  const c = calc(); return { v: c.cout, src: d.saisie ? "paie calculée (mois non clôturé)" : "salaires de base (pas de planning saisi)", est: !d.saisie };
+}
+function chiffresMois(soc, m, d, charges) {
+  const jours = (d.caisse && d.caisse.jours) || {}, tgc = num(soc.tauxTGC);
+  let ttc = 0, ht = 0, tickets = 0, nj = 0;
+  Object.entries(jours).forEach(([j, x]) => { if (j.slice(0, 7) !== m) return; const t = num(x.ttc), h = num(x.ht) || (t && tgc ? t / (1 + tgc / 100) : t); if (t || h) nj++; ttc += t || h; ht += h; tickets += num(x.tickets); });
+  const deb = m + "-01", fin = finMoisDe(m), auj = jourLocal(), complet = fin < auj;
+  const achats = charges.filter((c) => catVariable(c.categorie) && (c.date || "").slice(0, 7) === m).reduce((a, c) => a + num(c.ht), 0);
+  const autres = charges.filter((c) => !catVariable(c.categorie)).reduce((a, c) => {
+    const pd = c.periodeDebut || (c.date || deb).slice(0, 7) + "-01", pf = c.periodeFin || finMoisDe((c.date || deb).slice(0, 7));
+    const o1 = pd > deb ? pd : deb, o2 = pf < fin ? pf : fin; return o2 >= o1 ? a + num(c.ht) * nbJours(o1, o2) / nbJours(pd, pf) : a; }, 0);
+  const tauxTheo = num(soc.tauxMatiere) || 30, reel = complet && achats > 0 && ht > 0 && achats / ht > 0.15;
+  const mat = reel ? achats : ht * tauxTheo / 100;
+  const fixes = (soc.chargesFixes || []).filter((x) => num(x.montant)).map((x) => ({ lib: x.lib || catLib(x.cat), v: num(x.montant) }));
+  const red = ht * num(soc.redevancePct) / 100, ms = masseDuMois(soc, m, d);
+  const totFixes = fixes.reduce((a, x) => a + x.v, 0), res = ht - mat - red - ms.v - totFixes - autres;
+  return { m, ttc, ht, tickets, nj, complet, mat, matReel: reel, tauxMat: ht ? mat / ht * 100 : tauxTheo, red, ms, fixes, totFixes, autres, res };
+}
+function projeter(soc, hist, h) {
+  const base = hist.slice(-3), n = base.length || 1, moy = (k) => base.reduce((a, x) => a + x[k], 0) / n;
+  const caBase = moy("ht"), out = []; let dernier = hist[hist.length - 1].m;
+  for (let i = 1; i <= h.nb; i++) {
+    const m = moisDecaleR(dernier, i), ht = caBase * Math.pow(1 + h.croissance / 100, i);
+    const mat = ht * h.tauxMat / 100, red = ht * num(soc.redevancePct) / 100;
+    const fixes = (soc.chargesFixes || []).filter((x) => num(x.montant)).map((x) => ({ lib: x.lib || catLib(x.cat), v: num(x.montant) }));
+    if (h.nouvMt) fixes.push({ lib: h.nouvLib || "Nouvelle charge", v: h.nouvMt });
+    const totFixes = fixes.reduce((a, x) => a + x.v, 0);
+    out.push({ m, proj: true, ht, ttc: ht * (1 + num(soc.tauxTGC) / 100), tickets: 0, mat, red, ms: { v: h.masse }, fixes, totFixes, autres: h.autres, res: ht - mat - red - h.masse - totFixes - h.autres, tauxMat: h.tauxMat });
+  }
+  return out;
+}
+function htmlRapport(soc, hist, proj, h) {
+  const tous = [...hist, ...proj], nomS = `${soc.forme ? soc.forme + " " : ""}${soc.nom}`, ens = soc.enseigne || ENSEIGNES[soc.id] || "";
+  const f = (x) => F(Math.round(x)), pct = (x) => (Number.isFinite(x) ? x.toFixed(1).replace(".", ",") + " %" : "—");
+  const somme = (L, k) => L.reduce((a, x) => a + (typeof k === "function" ? k(x) : x[k]), 0);
+  const libsFixes = [...new Set(tous.flatMap((x) => x.fixes.map((y) => y.lib)))];
+  const ligne = (lib, get, opt = {}) => `<tr class="${opt.cls || ""}"><td>${lib}</td>${tous.map((x) => `<td class="n ${x.proj ? "p" : ""}">${get(x)}</td>`).join("")}<td class="n t">${opt.tot !== undefined ? opt.tot : ""}</td></tr>`;
+  const caH = somme(hist, "ht"), resH = somme(hist, "res"), nH = hist.length;
+  const evol = hist.length > 1 && hist[0].ht ? (hist[hist.length - 1].ht / hist[0].ht - 1) * 100 : NaN;
+  // graphique
+  const W = 680, H = 210, pad = 34, bw = (W - pad) / tous.length, max = Math.max(1, ...tous.map((x) => x.ht), ...tous.map((x) => x.res)), minR = Math.min(0, ...tous.map((x) => x.res));
+  const y = (v) => H - 24 - (v - minR) / (max - minR) * (H - 44), yr = y;
+  const svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="CA HT et résultat par mois">
+    <defs><pattern id="hach" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#d9eef0"/><line x1="0" y1="0" x2="0" y2="6" stroke="#0b6e78" stroke-width="2"/></pattern></defs>
+    ${(minR < 0 ? [minR / max, 0, 0.5, 1] : [0, 0.5, 1]).map((r) => `<line x1="${pad}" x2="${W}" y1="${y(max * r)}" y2="${y(max * r)}" stroke="${r === 0 ? "#9fb3b8" : "#e3e6e8"}"/><text x="${pad - 4}" y="${y(max * r) + 3}" font-size="9" text-anchor="end" fill="#667">${F(Math.round(max * r / 1000))}k</text>`).join("")}
+    ${tous.map((x, i) => `<rect x="${pad + i * bw + bw * 0.18}" y="${y(x.ht)}" width="${bw * 0.64}" height="${Math.max(0, y(0) - y(x.ht))}" fill="${x.proj ? "url(#hach)" : "#0b6e78"}" rx="2"><title>${moisCourt(x.m)} : CA HT ${f(x.ht)} F</title></rect>
+      <text x="${pad + i * bw + bw / 2}" y="${H - 8}" font-size="10" text-anchor="middle" fill="#334">${moisCourt(x.m)}</text>`).join("")}
+    <polyline points="${tous.map((x, i) => `${pad + i * bw + bw / 2},${yr(x.res)}`).join(" ")}" fill="none" stroke="#d4882a" stroke-width="2.2"/>
+    ${tous.map((x, i) => `<circle cx="${pad + i * bw + bw / 2}" cy="${yr(x.res)}" r="3.2" fill="${x.res >= 0 ? "#2f8f5b" : "#c0392b"}"><title>${moisCourt(x.m)} : résultat ${f(x.res)} F</title></circle>`).join("")}
+  </svg>
+  <div class="leg"><span><i style="background:#0b6e78"></i>CA HT réalisé</span>${proj.length ? `<span><i style="background:url(#hach);background:repeating-linear-gradient(45deg,#d9eef0 0 3px,#0b6e78 3px 5px)"></i>CA HT projeté</span>` : ""}<span><i style="background:#d4882a;height:3px"></i>Résultat de gestion</span></div>`;
+  const notesEst = [];
+  if (hist.some((x) => !x.matReel)) notesEst.push(`Coût matière estimé à ${num(soc.tauxMatiere) || 30} % du CA HT lorsque les factures d'achat du mois ne sont pas toutes saisies (mois marqués *).`);
+  if (hist.some((x) => x.ms.est)) notesEst.push("Masse salariale estimée pour certains mois (bulletins de l'ancien prestataire ou salaires de base), marquée †.");
+  if (!num(soc.tauxTGC)) notesEst.push("Taux de TGC non renseigné : le CA HT est assimilé au CA TTC.");
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>État de gestion ${esc(nomS)} ${moisCourt(hist[0].m)}–${moisCourt(tous[tous.length - 1].m)}</title>
+  <style>
+    @page{size:A4 landscape;margin:12mm}*{box-sizing:border-box}body{font:11px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1d2327;margin:0;padding:18px;background:#fff}
+    .bar{position:sticky;top:0;background:#0b6e78;color:#fff;padding:10px 14px;margin:-18px -18px 16px;display:flex;gap:12px;align-items:center}.bar button{font:inherit;padding:7px 14px;border:0;border-radius:6px;background:#fff;color:#0b6e78;font-weight:600;cursor:pointer}
+    header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #0b6e78;padding-bottom:8px;margin-bottom:12px}h1{font-size:19px;margin:0;color:#0b6e78}h2{font-size:13px;margin:16px 0 6px;color:#0b6e78;text-transform:uppercase;letter-spacing:.04em}
+    .id{font-size:10.5px;color:#556;text-align:right}.kp{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:8px 0 4px}.kp div{border:1px solid #dde3e6;border-radius:6px;padding:8px}.kp b{display:block;font-size:15px}.kp span{color:#667;font-size:10px}
+    table{border-collapse:collapse;width:100%;font-size:10.5px}th,td{padding:4px 6px;border-bottom:1px solid #e6eaec}th{background:#f1f5f6;text-align:right;font-weight:600}th:first-child,td:first-child{text-align:left}
+    td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}td.p,th.p{background:#f3fafb;color:#2c4f55}td.t{font-weight:600;background:#fafbfb}tr.st td{font-weight:700;border-top:1.5px solid #9fb3b8}tr.sub td:first-child{padding-left:16px;color:#556}
+    tr.res td{font-weight:700;font-size:11.5px;background:#eef6f7}.neg{color:#b33a2b}.pos{color:#24734a}.leg{display:flex;gap:16px;font-size:10px;color:#556;margin-top:2px}.leg i{display:inline-block;width:14px;height:9px;margin-right:4px;vertical-align:middle}
+    .hyp{display:grid;grid-template-columns:repeat(3,1fr);gap:4px 16px;font-size:10.5px}.notes{font-size:9.5px;color:#667;margin-top:10px}.sign{margin-top:18px;display:flex;justify-content:flex-end;font-size:10.5px}
+    @media print{.bar{display:none}body{padding:0}.page{break-inside:avoid}}
+  </style></head><body>
+  <div class="bar"><button onclick="window.print()">Imprimer / Enregistrer en PDF</button><span>Astuce : choisissez « Enregistrer au format PDF » pour l'envoyer par e-mail à la banque.</span></div>
+  <header><div><h1>État de gestion${proj.length ? " et prévisionnel" : ""}</h1><div style="font-size:13px;font-weight:600">${esc(nomS)}${ens ? " — " + esc(ens) : ""}</div>
+    <div style="color:#556">Période réalisée : ${moisLib(hist[0].m).toLowerCase()} à ${moisLib(hist[hist.length - 1].m).toLowerCase()}${proj.length ? ` · projection : ${moisLib(proj[0].m).toLowerCase()} à ${moisLib(proj[proj.length - 1].m).toLowerCase()}` : ""}</div></div>
+    <div class="id">${soc.ridet ? "RIDET " + esc(soc.ridet) + "<br>" : ""}${soc.adresse ? esc(soc.adresse).replace(/\n/g, "<br>") + "<br>" : ""}Établi le ${frDate(jourLocal())}</div></header>
+  <div class="kp">
+    <div><span>CA HT réalisé (${nH} mois)</span><b>${f(caH)} F</b></div>
+    <div><span>CA HT moyen mensuel</span><b>${f(caH / nH)} F</b></div>
+    <div><span>Évolution du CA sur la période</span><b class="${evol >= 0 ? "pos" : "neg"}">${Number.isFinite(evol) ? (evol >= 0 ? "+" : "") + pct(evol) : "—"}</b></div>
+    <div><span>Résultat de gestion cumulé</span><b class="${resH >= 0 ? "pos" : "neg"}">${f(resH)} F</b></div>
+    <div><span>Marge de gestion</span><b class="${resH >= 0 ? "pos" : "neg"}">${caH ? pct(resH / caH * 100) : "—"}</b></div>
+  </div>
+  <div class="page">${svg}</div>
+  <h2>Compte de résultat de gestion mensuel (F CFP)</h2>
+  <table><thead><tr><th></th>${tous.map((x) => `<th class="${x.proj ? "p" : ""}">${moisCourt(x.m)}${x.proj ? "<br><small>prévision</small>" : !x.complet ? "<br><small>en cours</small>" : ""}</th>`).join("")}<th>Total réalisé</th></tr></thead><tbody>
+    ${ligne("Chiffre d'affaires TTC", (x) => f(x.ttc), { tot: f(somme(hist, "ttc")) })}
+    ${ligne("<b>Chiffre d'affaires HT</b>", (x) => `<b>${f(x.ht)}</b>`, { tot: f(caH), cls: "st" })}
+    ${hist.some((x) => x.tickets) ? ligne("Nombre de commandes", (x) => (x.proj ? "" : F(x.tickets)), { tot: F(somme(hist, "tickets")), cls: "sub" }) + ligne("Panier moyen TTC", (x) => (x.proj || !x.tickets ? "" : f(x.ttc / x.tickets)), { cls: "sub" }) : ""}
+    ${ligne("Achats de matières", (x) => `${f(x.mat)}${!x.proj && !x.matReel ? "*" : ""}`, { tot: f(somme(hist, "mat")) })}
+    ${ligne("&nbsp;&nbsp;en % du CA HT", (x) => pct(x.tauxMat), { cls: "sub" })}
+    ${num(soc.redevancePct) ? ligne("Redevance de franchise", (x) => f(x.red), { tot: f(somme(hist, "red")) }) : ""}
+    ${ligne("<b>Marge brute</b>", (x) => `<b>${f(x.ht - x.mat - x.red)}</b>`, { tot: f(somme(hist, (x) => x.ht - x.mat - x.red)), cls: "st" })}
+    ${ligne("Personnel (coût employeur)", (x) => `${f(x.ms.v)}${x.ms.est ? "†" : ""}`, { tot: f(somme(hist, (x) => x.ms.v)) })}
+    ${ligne("&nbsp;&nbsp;en % du CA HT", (x) => (x.ht ? pct(x.ms.v / x.ht * 100) : "—"), { cls: "sub" })}
+    ${libsFixes.map((l) => ligne(esc(l), (x) => { const v = x.fixes.filter((y) => y.lib === l).reduce((a, y) => a + y.v, 0); return v ? f(v) : "—"; }, { tot: f(somme(hist, (x) => x.fixes.filter((y) => y.lib === l).reduce((a, y) => a + y.v, 0))), cls: "sub" })).join("")}
+    ${ligne("Autres charges (factures)", (x) => f(x.autres), { tot: f(somme(hist, "autres")) })}
+    ${ligne("Résultat de gestion", (x) => `<span class="${x.res >= 0 ? "pos" : "neg"}">${f(x.res)}</span>`, { tot: `<span class="${resH >= 0 ? "pos" : "neg"}">${f(resH)}</span>`, cls: "res" })}
+    ${ligne("&nbsp;&nbsp;marge en % du CA HT", (x) => (x.ht ? pct(x.res / x.ht * 100) : "—"), { tot: caH ? pct(resH / caH * 100) : "", cls: "sub" })}
+  </tbody></table>
+  ${proj.length ? `<h2>Hypothèses de la projection</h2><div class="hyp">
+    <div>Base : moyenne des ${Math.min(3, hist.length)} derniers mois réalisés (CA HT ${f(somme(hist.slice(-3), "ht") / Math.min(3, hist.length))} F/mois)</div>
+    <div>Évolution du CA : ${h.croissance >= 0 ? "+" : ""}${String(h.croissance).replace(".", ",")} % par mois</div>
+    <div>Coût matière : ${String(h.tauxMat).replace(".", ",")} % du CA HT</div>
+    <div>Personnel : ${f(h.masse)} F par mois</div>
+    <div>Autres charges : ${f(h.autres)} F par mois</div>
+    ${h.nouvMt ? `<div>${esc(h.nouvLib || "Nouvelle charge")} : ${f(h.nouvMt)} F par mois</div>` : ""}
+  </div>` : ""}
+  ${h.commentaire ? `<h2>Commentaire</h2><p style="white-space:pre-wrap;margin:0">${esc(h.commentaire)}</p>` : ""}
+  <div class="notes"><b>Méthode.</b> CA issu du logiciel de caisse${soc.caisse ? ` (${esc(soc.caisse)})` : ""}, relevé quotidiennement ; personnel issu du logiciel de paie (coût employeur, charges patronales comprises) ; charges fixes mensuelles déclarées ; autres charges issues des factures enregistrées, réparties sur leur période. Le résultat de gestion est un indicateur de pilotage avant amortissements, frais financiers et impôts ; les échéances de crédit éventuellement incluses dans les charges fixes comprennent le capital remboursé. Il ne remplace pas les comptes établis par l'expert-comptable.${notesEst.length ? "<br>" + notesEst.join("<br>") : ""}</div>
+  <div class="sign"><div>Pour ${esc(nomS)},<br>${esc(soc.representant || "Le gérant")}${soc.qualiteRep ? ", " + esc(soc.qualiteRep) : ""}</div></div>
+  </body></html>`;
+}
+function ouvrirRapportBanque() {
+  const soc = socDoc(); if (!soc) return;
+  const auj = jourLocal(), moisCourant = auj.slice(0, 7);
+  const dlg = document.createElement("div"); dlg.className = "modal-fond";
+  dlg.innerHTML = `<div class="panel modal" role="dialog" aria-label="État de gestion pour la banque" style="max-width:640px"><h2>État de gestion pour la banque · ${esc(soc.enseigne || ENSEIGNES[soc.id] || soc.nom)}</h2>
+    <div class="form">
+      <label>Période réalisée<select id="rb_nb"><option value="3">3 derniers mois</option><option value="6" selected>6 derniers mois</option><option value="12">12 derniers mois</option></select></label>
+      <label>Jusqu'au mois de<select id="rb_fin">${[0, 1, 2, 3].map((i) => { const m = moisDecaleR(moisCourant, -i); return `<option value="${m}" ${i === 1 ? "selected" : ""}>${moisLib(m).toLowerCase()}${i === 0 ? " (en cours)" : ""}</option>`; }).join("")}</select></label>
+      <label>Projection<select id="rb_proj"><option value="0">Aucune</option><option value="3" selected>3 mois</option><option value="6">6 mois</option></select></label>
+    </div>
+    <p class="small muted" style="margin:0" id="rb_etat">Chargement des données…</p>
+    <div id="rb_hyp" style="display:none"><h3 style="margin:6px 0">Hypothèses de projection</h3><div class="form">
+      <label>Évolution du CA (% par mois)<input id="rb_cr" type="number" step="0.5" value="0"></label>
+      <label>Coût matière (% du CA HT)<input id="rb_tm" type="number" step="0.5"></label>
+      <label>Personnel par mois (F)<input id="rb_ms" class="mt" inputmode="numeric"></label>
+      <label>Autres charges par mois (F)<input id="rb_au" class="mt" inputmode="numeric"></label>
+      <label>Nouvelle charge (ex. échéance du prêt demandé)<input id="rb_nl" placeholder="libellé"></label>
+      <label>Montant mensuel (F)<input id="rb_nm" class="mt" inputmode="numeric" placeholder="0"></label>
+    </div></div>
+    <label class="small" style="display:block;margin-top:6px">Commentaire à joindre (facultatif)<textarea id="rb_com" rows="2" style="width:100%" placeholder="ex. ouverture de Koutio en septembre, travaux prévus…"></textarea></label>
+    <div id="rb_apercu" class="small" style="margin-top:6px"></div>
+    <div class="row"><button class="primary" id="rb_go" disabled>Aperçu et impression</button><button id="rb_ko">Fermer</button></div></div>`;
+  document.body.appendChild(dlg);
+  const fermer = () => dlg.remove(); dlg.querySelector("#rb_ko").onclick = fermer; dlg.onclick = (e) => { if (e.target === dlg) fermer(); };
+  const q = (s) => dlg.querySelector(s); let data = null, histCache = null, defaut = null;
+  const recharger = async () => {
+    const nb = Number(q("#rb_nb").value), fin = q("#rb_fin").value, mois = Array.from({ length: nb }, (_, i) => moisDecaleR(fin, i - nb + 1));
+    q("#rb_go").disabled = true; q("#rb_etat").textContent = "Chargement des données…";
+    try { data = await chargerRapport(soc, mois); } catch (e) { q("#rb_etat").textContent = "Lecture impossible : " + (e.message || e); return; }
+    histCache = mois.map((m) => chiffresMois(soc, m, data.mois[m], data.charges)).filter((x, i, a) => x.ht || a.slice(0, i).some((y) => y.ht));
+    if (!histCache.length) { q("#rb_etat").textContent = "Aucun chiffre d'affaires enregistré sur cette période."; return; }
+    const b = histCache.slice(-3), n = b.length;
+    defaut = { tauxMat: Math.round(b.reduce((a, x) => a + x.tauxMat, 0) / n * 10) / 10, masse: Math.round(b.reduce((a, x) => a + x.ms.v, 0) / n), autres: Math.round(b.reduce((a, x) => a + x.autres, 0) / n) };
+    q("#rb_tm").value = defaut.tauxMat; q("#rb_ms").value = fmtMt(defaut.masse); q("#rb_au").value = fmtMt(defaut.autres);
+    q("#rb_etat").textContent = `${histCache.length} mois de données trouvés (${moisCourt(histCache[0].m)} → ${moisCourt(histCache[histCache.length - 1].m)}).`;
+    q("#rb_go").disabled = false; majHyp();
+  };
+  const hyp = () => ({ nb: Number(q("#rb_proj").value), croissance: num(q("#rb_cr").value), tauxMat: num(q("#rb_tm").value), masse: num(q("#rb_ms").value), autres: num(q("#rb_au").value), nouvLib: q("#rb_nl").value.trim(), nouvMt: num(q("#rb_nm").value), commentaire: q("#rb_com").value.trim() });
+  const majHyp = () => {
+    q("#rb_hyp").style.display = Number(q("#rb_proj").value) ? "" : "none";
+    if (!histCache) return; const h = hyp(), pr = h.nb ? projeter(soc, histCache, h) : [];
+    const resH = histCache.reduce((a, x) => a + x.res, 0), resP = pr.reduce((a, x) => a + x.res, 0);
+    q("#rb_apercu").innerHTML = `Réalisé : CA HT ${F(Math.round(histCache.reduce((a, x) => a + x.ht, 0)))} F, résultat <b class="${resH >= 0 ? "pos" : "neg"}">${F(Math.round(resH))} F</b>${pr.length ? ` · Projection ${pr.length} mois : CA HT ${F(Math.round(pr.reduce((a, x) => a + x.ht, 0)))} F, résultat <b class="${resP >= 0 ? "pos" : "neg"}">${F(Math.round(resP))} F</b>` : ""}`;
+  };
+  ["#rb_nb", "#rb_fin"].forEach((s) => (q(s).onchange = recharger));
+  ["#rb_proj", "#rb_cr", "#rb_tm", "#rb_ms", "#rb_au", "#rb_nm"].forEach((s) => (q(s).oninput = q(s).onchange = majHyp));
+  q("#rb_go").onclick = () => {
+    const h = hyp(), pr = h.nb ? projeter(soc, histCache, h) : [];
+    const w = window.open("", "_blank"); if (!w) { toast("Autorisez l'ouverture de fenêtres pour imprimer."); return; }
+    w.document.write(htmlRapport(soc, histCache, pr, h)); w.document.close();
+  };
+  recharger();
 }
 
 if (!window.supabase || !window.SUPABASE_URL || /REMPLACER/.test(window.SUPABASE_URL + window.SUPABASE_ANON_KEY)) {
