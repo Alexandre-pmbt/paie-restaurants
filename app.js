@@ -2316,7 +2316,11 @@ const montantFacture = (c) => num(c.ttc) || num(c.ht);
 const payeAu = (c, jour) => (c.paiements || []).filter((p) => !jour || (p.le || "") <= jour).reduce((a, p) => a + num(p.montant), 0);
 const infoFourn = (soc, cle) => ((S.socs.find((x) => x.id === soc) || {}).fournisseurs || {})[cle] || {};
 function delaiFourn(soc, cle) { const f = ((S.socs.find((x) => x.id === soc) || {}).fournisseurs || {})[cle]; return f && f.delai != null ? Number(f.delai) : 30; }
-const echeanceDe = (c) => c.echeance || plAdd(c.date, delaiFourn(c.societe, cleFourn(c.fournisseur)));
+/* Échéance selon les conditions du fournisseur : X jours net, ou X jours fin de mois (date + X jours, reportée au dernier jour de ce mois) */
+const finDeMois = (d) => { const [y, m] = d.split("-").map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
+const echeanceCalc = (soc, cle, date) => { const d = plAdd(date, delaiFourn(soc, cle)); return infoFourn(soc, cle).fdm ? finDeMois(d) : d; };
+const conditionTxt = (soc, cle) => `${delaiFourn(soc, cle)} j${infoFourn(soc, cle).fdm ? " fin de mois" : " net"}`;
+const echeanceDe = (c) => c.echeance || echeanceCalc(c.societe, cleFourn(c.fournisseur), c.date);
 S.dt = { tous: false, ouvert: null, data: null, jour: null };
 function chargerDettes(force) {
   const cle = S.dt.tous ? "*" : S.soc;
@@ -2348,7 +2352,7 @@ function dettesAu(liste, jour) {
     const f = parF[k] = parF[k] || { cle: k, nom: k, factures: [], du: 0, echu: 0, sous7: 0, plusVieille: null, socs: new Set() };
     f.solde = { ...sd, sid, justif: Math.round(justif), regle, reste, ecart: Math.round(justif + regle - num(sd.montant)) };
     if (reste <= 0) return;
-    const ech = plAdd(sd.au, delaiFourn(sid, k)), retard = Math.round((new Date(jour) - new Date(ech)) / 86400000);
+    const ech = echeanceCalc(sid, k, sd.au), retard = Math.round((new Date(jour) - new Date(ech)) / 86400000);
     f.factures.push({ manuel: true, sid, du: reste, ech, retard, sd }); f.du += reste; f.socs.add(sid);
     if (retard > 0) f.echu += reste; else if (retard >= -7) f.sous7 += reste;
     if (!f.plusVieille || ech < f.plusVieille) f.plusVieille = ech;
@@ -2385,14 +2389,14 @@ function renderDettes(v) {
       <div class="kpi"><b>${nf}</b><span>Facture(s) non réglée(s)</span></div>
     </div>
     ${courbeDettes(D.liste, jour)}
-    <div class="tbl-wrap"><table><thead><tr><th>Fournisseur</th><th class="num">Factures</th><th class="num">Montant dû</th><th class="num">Dont échu</th><th>Plus ancienne échéance</th><th class="num">Délai (jours)</th><th></th>${S.admin && !S.dt.tous ? "<th></th>" : ""}</tr></thead><tbody>
+    <div class="tbl-wrap"><table><thead><tr><th>Fournisseur</th><th class="num">Factures</th><th class="num">Montant dû</th><th class="num">Dont échu</th><th>Plus ancienne échéance</th><th>Conditions de paiement</th><th></th>${S.admin && !S.dt.tous ? "<th></th>" : ""}</tr></thead><tbody>
     ${fours.map((f) => { const retard = f.plusVieille ? Math.round((new Date(jour) - new Date(f.plusVieille)) / 86400000) : null; const ouvert = S.dt.ouvert === f.cle;
       const socDelai = S.dt.tous ? null : S.soc;
       return `<tr class="${f.echu ? "" : ""}"><td><b>${esc(f.nom)}</b>${S.dt.tous && f.socs.size ? `<div class="small muted">${[...f.socs].map(socNom).map(esc).join(", ")}</div>` : ""}</td>
         <td class="num">${f.factures.filter((x) => !x.manuel).length || "—"}</td><td class="num"><b>${f.du ? F(f.du) : "—"}</b>${f.factures.some((x) => x.manuel) ? '<div class="small muted">dont solde saisi</div>' : ""}</td>
         <td class="num ${f.echu ? "neg" : ""}">${f.echu ? F(f.echu) : "—"}</td>
         <td>${f.plusVieille ? `${frDate(f.plusVieille)} ${retard > 0 ? `<span class="chip bad">${retard} j de retard</span>` : retard >= -7 ? `<span class="chip warn">sous ${-retard} j</span>` : ""}` : '<span class="small muted">rien à payer</span>'}</td>
-        <td class="num">${socDelai && S.admin ? `<input type="number" min="0" step="1" data-delai="${esc(f.cle)}" value="${delaiFourn(socDelai, f.cle)}" style="width:4.5em;text-align:right">` : socDelai ? delaiFourn(socDelai, f.cle) : '<span class="small muted">par société</span>'}</td>
+        <td style="white-space:nowrap">${socDelai && S.admin ? `<input type="number" min="0" step="1" data-delai="${esc(f.cle)}" value="${delaiFourn(socDelai, f.cle)}" style="width:4.2em;text-align:right" aria-label="Délai en jours"> j <select data-fdm="${esc(f.cle)}" aria-label="Type de délai"><option value="">net</option><option value="1" ${infoFourn(socDelai, f.cle).fdm ? "selected" : ""}>fin de mois</option></select>` : socDelai ? conditionTxt(socDelai, f.cle) : '<span class="small muted">par société</span>'}</td>
         <td>${f.factures.length ? `<button class="link" data-dtf="${esc(f.cle)}">${ouvert ? "Masquer" : "Détail"}</button>` : ""}</td>${S.admin && !S.dt.tous ? `<td>${suivisDe(S.soc).includes(f.cle) ? `<button class="link" data-dtsup="${esc(f.cle)}" title="Retirer de la liste des fournisseurs suivis">Retirer</button>` : ""}</td>` : ""}</tr>
         ${(() => { const inf = infoFourn(S.dt.tous ? [...f.socs][0] || S.soc : S.soc, f.cle), ed = S.admin && !S.dt.tous;
           return `<tr class="dt-info"><td colspan="${S.admin && !S.dt.tous ? 8 : 7}"><div class="row" style="flex-wrap:wrap;gap:8px 18px;align-items:center">
@@ -2414,7 +2418,7 @@ function renderDettes(v) {
         </tbody></table></td></tr>` : ""}`; }).join("")}
     </tbody></table></div>
     ${S.admin && !S.dt.tous ? `<div class="row" style="flex-wrap:wrap"><input id="dtNouv" placeholder="Nom du fournisseur à suivre" style="width:16em"><button id="dtAjF">+ Ajouter le fournisseur</button><span class="small muted">Un fournisseur suivi reste affiché même sans dette. Un fournisseur retiré réapparaît tant qu'il a des factures impayées.</span></div>` : ""}
-    <p class="small muted" style="margin:0">Vous pouvez saisir à la main le solde dû à un fournisseur, à une date : tant que les factures ne sont pas enregistrées, c'est ce montant qui compte. Chaque facture ajoutée datée de ce jour ou avant vient s'y rattacher (le total ne bouge pas, la part « à justifier » diminue) ; les factures postérieures s'y ajoutent.<br>Les dettes viennent des factures déposées dans « Caisse &amp; factures » ou saisies ci-dessous. L'échéance est celle de la facture, sinon la date de facture + le délai du fournisseur (30 jours par défaut, modifiable). Montants TTC.</p>
+    <p class="small muted" style="margin:0">Vous pouvez saisir à la main le solde dû à un fournisseur, à une date : tant que les factures ne sont pas enregistrées, c'est ce montant qui compte. Chaque facture ajoutée datée de ce jour ou avant vient s'y rattacher (le total ne bouge pas, la part « à justifier » diminue) ; les factures postérieures s'y ajoutent.<br>Les dettes viennent des factures déposées dans « Caisse &amp; factures » ou saisies ci-dessous. L'échéance est celle de la facture, sinon elle est calculée avec les conditions du fournisseur : « 30 j net » = date de facture + 30 jours ; « 30 j fin de mois » = date + 30 jours, reportée au dernier jour de ce mois (30 j net par défaut, modifiable). Montants TTC.</p>
   </div>
   ${S.admin || S.profil ? `<div class="panel" id="dtAjout"><h2>Ajouter une facture fournisseur à payer</h2>
     <datalist id="dtNoms">${noms.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
@@ -2451,6 +2455,10 @@ function renderDettes(v) {
     const mt = num(prompt(`Montant payé sur le solde de ${k} (reste ${F(st.reste)} F) :`, String(st.reste)) || 0); if (!mt) return;
     const le = prompt("Date du paiement (AAAA-MM-JJ) :", today()) || today(); if (!/^\d{4}-\d{2}-\d{2}$/.test(le)) { toast("Date invalide."); return; }
     majSolde(k, (sd) => ({ ...sd, paiements: [...((sd && sd.paiements) || []), { le, montant: mt, par: S.profil.nom || "", saisiLe: new Date().toISOString() }] }), "Paiement sur le solde enregistré."); }));
+  v.querySelectorAll("[data-fdm]").forEach((i) => (i.onchange = async () => {
+    const soc = socDoc(); const fr = { ...(soc.fournisseurs || {}) }; fr[i.dataset.fdm] = { ...(fr[i.dataset.fdm] || {}), fdm: !!i.value };
+    try { await S.db.doc("societes/" + S.soc).update({ fournisseurs: fr }); soc.fournisseurs = fr; toast(`Conditions : ${conditionTxt(S.soc, i.dataset.fdm)}.`); const y = window.scrollY; render(); window.scrollTo(0, y); } catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
+  }));
   v.querySelectorAll("[data-delai]").forEach((i) => (i.onchange = async () => {
     const soc = socDoc(); const fr = { ...(soc.fournisseurs || {}) }; fr[i.dataset.delai] = { ...(fr[i.dataset.delai] || {}), delai: Math.max(0, Math.round(num(i.value))) };
     try { await S.db.doc("societes/" + S.soc).update({ fournisseurs: fr }); soc.fournisseurs = fr; toast("Délai de paiement enregistré."); render(); } catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
