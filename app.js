@@ -2038,26 +2038,84 @@ function lireMercuriale(wb, enEuros) {
 const coutU = (x) => (x < 1000 && Math.round(x) !== x ? (Math.round(x * 100) / 100).toFixed(2).replace(".", ",") : F(Math.round(x)));
 const SRC_LIB = { newrest: "PR Newrest Nouméa", estimation: "Estimation (prix France × coef. d'approche)", manuel: "Saisi manuellement" };
 const srcChip = (p) => p.source === "newrest" ? `<div class="small muted" title="${esc(`${F(p.prixNR)} F HT — ${p.uniteNR || ""}`)}">PR Newrest</div>` : p.source === "estimation" ? `<div><span class="chip warn" title="Prix départ France × ${esc(String(p.coef || "").replace(".", ","))} F/€ (coefficient d'approche médian Newrest)">estimé</span></div>` : "";
+/* Listes de départ par enseigne (sans prix : à compléter avec vos tarifs fournisseurs) */
+const LISTES_DEPART = {
+  chamas: [["Pains & galettes", ["Galettes tortillas tacos|unité", "Galettes tortillas grand format|unité"]],
+    ["Viandes", ["Poulet mariné|kg", "Viande hachée|kg", "Cordon bleu|unité", "Nuggets|kg", "Tenders|kg", "Merguez|kg", "Viande kebab|kg"]],
+    ["Fromages & crèmerie", ["Sauce fromagère|kg", "Cheddar en tranches|unité", "Mozzarella râpée|kg", "Raclette|kg", "Crème liquide|l"]],
+    ["Frites & surgelés", ["Frites|kg", "Potatoes|kg", "Mozza sticks|kg", "Onion rings|kg"]],
+    ["Sauces", ["Sauce algérienne|l", "Sauce samouraï|l", "Sauce biggy|l", "Sauce blanche|l", "Sauce harissa|l", "Sauce barbecue|l", "Sauce andalouse|l", "Ketchup|l", "Mayonnaise|l"]],
+    ["Légumes", ["Oignons|kg", "Salade|kg", "Tomates|kg"]],
+    ["Épicerie", ["Huile de friture|l", "Sel|kg", "Épices / assaisonnement|kg"]],
+    ["Boissons", ["Canettes 33 cl|unité", "Eau 50 cl|unité"]],
+    ["Desserts", ["Chonuts|unité"]],
+    ["Emballages", ["Boîtes tacos|unité", "Papier tacos / aluminium|rouleau", "Sacs kraft|unité", "Pots à sauce + couvercles|unité", "Gobelets|unité", "Serviettes|unité", "Gants|boîte"]],
+    ["Hygiène & entretien", ["Dégraissant|l", "Produit vaisselle|l", "Sacs poubelle|rouleau"]]],
+  pizza: [["Pâte", ["Farine|kg", "Levure|kg", "Sel|kg", "Huile d'olive|l", "Semoule (fleurage)|kg"]],
+    ["Bases & fromages", ["Sauce tomate|kg", "Crème fraîche|l", "Mozzarella|kg", "Emmental râpé|kg", "Chèvre|kg", "Gorgonzola|kg", "Parmesan|kg"]],
+    ["Viandes", ["Jambon|kg", "Chorizo|kg", "Poulet|kg", "Viande hachée|kg", "Lardons|kg", "Merguez|kg"]],
+    ["Légumes & garnitures", ["Champignons|kg", "Olives|kg", "Poivrons|kg", "Oignons|kg", "Tomates|kg", "Ananas|boîte", "Origan|kg"]],
+    ["Boissons", ["Canettes 33 cl|unité", "Eau 50 cl|unité"]],
+    ["Emballages", ["Boîtes pizza 26 cm|unité", "Boîtes pizza 33 cm|unité", "Sacs|unité", "Serviettes|unité"]],
+    ["Hygiène & entretien", ["Dégraissant|l", "Produit vaisselle|l", "Sacs poubelle|rouleau"]]],
+};
+const normLib = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function lireListeProduits(wb) {
+  const out = [];
+  wb.SheetNames.forEach((sn) => {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null });
+    const hi = rows.findIndex((r) => r && r.some((c) => typeof c === "string" && /^(produit|d[ée]signation|libell[ée]|article|nom)/i.test(c.trim())));
+    if (hi < 0) return;
+    const h = rows[hi].map((c) => normLib(c)), col = (re) => h.findIndex((x) => re.test(x));
+    const cL = col(/^(produit|designation|libelle|article|nom)/), cC = col(/^(categorie|famille|rayon)/), cF = col(/^fournisseur/), cR = col(/^(code|ref)/),
+      cN = col(/^(conditionnement|colisage|cond)/), cQ = col(/^(unites? par colis|qte par colis|quantite par colis|nb par colis|par colis)/), cU = col(/^(unite|unite de comptage)$/),
+      cP = col(/^(prix colis|prix ht|prix|tarif|cout)/), cS = col(/^(seuil|minimum|stock mini|mini)/);
+    rows.slice(hi + 1).forEach((r) => {
+      if (!r || !r[cL] || !String(r[cL]).trim()) return;
+      const v = (i) => (i >= 0 && r[i] != null ? r[i] : ""), n = (i) => (i >= 0 ? (typeof r[i] === "number" ? r[i] : num(r[i])) : 0);
+      out.push({ lib: String(r[cL]).trim(), cat: String(v(cC) || "Divers").trim(), fourn: String(v(cF)).trim(), code: String(v(cR)).trim(), cond: String(v(cN)).trim(), parCond: n(cQ) || 1, unite: String(v(cU) || "unité").trim().toLowerCase(), prixCond: Math.round(n(cP)), min: n(cS), source: n(cP) ? "manuel" : undefined });
+    });
+  });
+  return out;
+}
+function fusionnerProduits(P, lus, idPrefix) {
+  let nv = 0, maj = 0;
+  lus.forEach((x, k) => {
+    const p = P.find((y) => (x.code && y.code && y.code === x.code) || normLib(y.lib) === normLib(x.lib));
+    if (p) { ["cat", "fourn", "code", "cond", "unite"].forEach((c) => { if (x[c] && x[c] !== "Divers" && x[c] !== "unité") p[c] = x[c]; }); if (x.prixCond) { p.prixCond = x.prixCond; p.source = "manuel"; delete p.coef; } if (x.parCond > 1) p.parCond = x.parCond; if (x.min) p.min = x.min; maj++; }
+    else { P.push({ id: idPrefix + Date.now().toString(36) + k, fourn: "", code: "", cond: "", parCond: 1, unite: "unité", prixCond: 0, min: 0, ...x }); nv++; }
+  });
+  return { nv, maj };
+}
 function renderStockCatalogue(v, nom, tabs) {
   const P = (S.stk.catEdit || (S.stk.catEdit = JSON.parse(JSON.stringify(S.stk.cat.produits || [])).sort((a, b) => (a.cat || "").localeCompare(b.cat || "") || a.lib.localeCompare(b.lib))));
   const cats = [...new Set(P.map((p) => p.cat || "Divers"))].sort();
   const tri = (L) => JSON.stringify([...L].sort((a, b) => a.id.localeCompare(b.id))); const sale = tri(P) !== tri(S.stk.cat.produits || []);
+  const marque = document.documentElement.dataset.marque || "", estColumbus = marque === "columbus" || P.some((p) => p.source === "newrest");
+  const depart = LISTES_DEPART[marque];
+  const autres = S.admin ? S.socs.filter((x) => x.id !== S.soc) : [];
   v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Stock — ${esc(nom)}</h2>${tabs}</div>
     <div class="row" style="flex-wrap:wrap">
-      <input type="file" id="stMerc" accept=".xlsx,.xls" hidden><button id="stMercB">Importer une mercuriale (Excel)</button>
-      <label class="check small"><input type="checkbox" id="stEur" checked> Prix de la mercuriale en euros (× ${String(EUR_XPF).replace(".", ",")})</label>
+      <input type="file" id="stListe" accept=".xlsx,.xls,.csv" hidden>
+      <button id="stModele" title="Fichier Excel à remplir avec vos produits et vos prix (vos produits actuels y sont déjà)">Télécharger le modèle Excel</button>
+      <button id="stListeB">Importer la liste (Excel)</button>
+      ${depart ? `<button id="stDepart" title="Ajoute une liste type de produits ${marque === "chamas" ? "Chamas Tacos" : "pizzeria"}, sans prix">Ajouter la liste type ${marque === "chamas" ? "Chamas Tacos" : "pizzeria"}</button>` : ""}
+      ${autres.length ? `<select id="stCopieSoc" aria-label="Restaurant à copier"><option value="">Copier la liste d'un autre restaurant…</option>${autres.map((x) => `<option value="${esc(x.id)}">${esc(x.enseigne || ENSEIGNES[x.id] || x.nom)}</option>`).join("")}</select>` : ""}
+      ${estColumbus ? `<input type="file" id="stMerc" accept=".xlsx,.xls" hidden><button id="stMercB">Importer une mercuriale (Excel)</button>
+      <label class="check small"><input type="checkbox" id="stEur" checked> Prix de la mercuriale en euros (× ${String(EUR_XPF).replace(".", ",")})</label>` : ""}
       <span class="grow"></span><button id="stCatX">Export des coûts (Excel)</button><button id="stAdd">+ Ajouter un produit</button>
       <button class="primary" id="stCatSave" ${sale ? "" : "disabled"}>${sale ? "Enregistrer les produits" : "Produits enregistrés ✓"}</button>
     </div>
     ${S.stk.cat.source ? `<p class="small muted" style="margin:0">Source : ${esc(S.stk.cat.source)}</p>` : ""}
-    <p class="small muted" style="margin:0">Le <b>seuil</b> est le stock minimum (dans l'unité de comptage) en dessous duquel une alerte apparaît ; la commande suggérée remonte le stock à deux fois le seuil. Il a été estimé à une semaine de consommation d'après la mercuriale : ajustez-le à votre rythme réel.</p>
+    <p class="small muted" style="margin:0">${estColumbus ? "" : "Le plus rapide : téléchargez le modèle Excel, remplissez-le avec vos produits et les prix de vos fournisseurs (Serdis, Nouméa Surgelés, Bargibant…), puis importez-le. Vous pouvez aussi partir de la liste type ou copier la liste d'un autre restaurant, puis corriger directement dans le tableau. "}Le <b>prix colis</b> est le prix HT payé pour un conditionnement (carton, sac, bidon…) ; le coût par unité en découle. Le <b>seuil</b> est le stock minimum (dans l'unité de comptage) en dessous duquel une alerte apparaît ; la commande suggérée remonte le stock à deux fois le seuil.</p>
+    ${!estColumbus && P.some((p) => !num(p.prixCond)) ? `<p class="small" style="margin:0;color:var(--warn,#b45309)">${P.filter((p) => !num(p.prixCond)).length} produit(s) sans prix : complétez la colonne « Prix colis » pour connaître vos coûts.</p>` : ""}
     <datalist id="stCats">${cats.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
-    <div class="tbl-wrap"><table class="stk"><thead><tr><th>Produit</th><th class="num">Prix PR Newrest<div class="small muted">F CFP HT</div></th><th class="num">Coût / unité<div class="small muted">F CFP HT</div></th><th class="num">Prix colis<div class="small muted">F CFP HT</div></th><th>Catégorie</th><th>Fournisseur</th><th>Code</th><th>Conditionnement</th><th class="num">Unités / colis</th><th>Unité de comptage</th><th class="num">Seuil</th><th></th></tr></thead><tbody>
+    <div class="tbl-wrap"><table class="stk"><thead><tr><th>Produit</th>${estColumbus ? `<th class="num">Prix PR Newrest<div class="small muted">F CFP HT</div></th>` : ""}<th class="num">Coût / unité<div class="small muted">F CFP HT</div></th><th class="num">Prix colis<div class="small muted">F CFP HT</div></th><th>Catégorie</th><th>Fournisseur</th><th>Code</th><th>Conditionnement</th><th class="num">Unités / colis</th><th>Unité de comptage</th><th class="num">Seuil</th><th></th></tr></thead><tbody>
     ${P.map((p, i) => `<tr>
       <td><input data-pf="lib" data-i="${i}" value="${esc(p.lib)}" style="min-width:17em"></td>
-      <td class="num">${p.source === "newrest" ? `<b>${coutU(num(p.prixNR))} F</b><div class="small muted">${esc((p.uniteNR || "").toLowerCase())}</div>` : `<span class="chip warn">pas dans les PR</span>`}</td>
+      ${estColumbus ? `<td class="num">${p.source === "newrest" ? `<b>${coutU(num(p.prixNR))} F</b><div class="small muted">${esc((p.uniteNR || "").toLowerCase())}</div>` : `<span class="chip warn">pas dans les PR</span>`}</td>` : ""}
       <td class="num" title="Prix du colis ÷ unités par colis">${coutU(prixUnite(p))} F<div class="small muted">/ ${esc(p.unite || "unité")}</div></td>
-      <td><input data-pf="prixCond" data-n="1" data-i="${i}" class="mt" value="${esc(fmtMt(p.prixCond || 0))}" style="width:7em;text-align:right">${srcChip(p)}</td>
+      <td><input data-pf="prixCond" data-n="1" data-i="${i}" class="mt" value="${esc(num(p.prixCond) ? fmtMt(p.prixCond) : "")}" placeholder="à renseigner" style="width:7em;text-align:right">${srcChip(p)}</td>
       <td><input data-pf="cat" data-i="${i}" value="${esc(p.cat || "")}" list="stCats" style="width:10em"></td>
       <td><input data-pf="fourn" data-i="${i}" value="${esc(p.fourn || "")}" style="width:9em"></td>
       <td><input data-pf="code" data-i="${i}" value="${esc(p.code || "")}" style="width:6em"></td>
@@ -2065,7 +2123,7 @@ function renderStockCatalogue(v, nom, tabs) {
       <td><input data-pf="parCond" data-n="1" data-i="${i}" value="${esc(qte(p.parCond || 1))}" style="width:5em;text-align:right"></td>
       <td><input data-pf="unite" data-i="${i}" value="${esc(p.unite || "")}" style="width:7em"></td>
       <td><input data-pf="min" data-n="1" data-i="${i}" value="${esc(qte(p.min || 0))}" style="width:5em;text-align:right"></td>
-      <td><button class="link" data-pdel="${i}" title="Retirer ce produit">✕</button></td></tr>`).join("") || `<tr><td colspan="12" class="muted">Aucun produit. Importez la mercuriale du fournisseur ou ajoutez les produits un par un.</td></tr>`}
+      <td><button class="link" data-pdel="${i}" title="Retirer ce produit">✕</button></td></tr>`).join("") || `<tr><td colspan="${estColumbus ? 12 : 11}" class="muted">Aucun produit pour l'instant. ${depart ? "Commencez par « Ajouter la liste type », ou " : ""}téléchargez le modèle Excel, remplissez-le puis importez-le.</td></tr>`}
     </tbody></table></div></div>`;
   v.querySelectorAll("[data-pf]").forEach((i) => (i.onchange = () => { P[i.dataset.i][i.dataset.pf] = i.dataset.n ? num(i.value) : i.value.trim(); if (i.dataset.pf === "prixCond") { P[i.dataset.i].source = "manuel"; delete P[i.dataset.i].coef; } const y = window.scrollY; render(); window.scrollTo(0, y); }));
   v.querySelectorAll("[data-pdel]").forEach((b) => (b.onclick = () => { const p = P[b.dataset.pdel]; if (!confirm(`Retirer « ${p.lib} » de la liste ? Les inventaires passés restent conservés.`)) return; P.splice(Number(b.dataset.pdel), 1); render(); }));
@@ -2075,8 +2133,39 @@ function renderStockCatalogue(v, nom, tabs) {
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Coûts produits");
     enregistrerFichier(nomFichier(`Couts_produits_${nom}_${jourLocal()}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
   };
-  $("#stMercB").onclick = () => $("#stMerc").click();
-  $("#stMerc").onchange = (e) => {
+  $("#stModele").onclick = () => {
+    const rows = (P.length ? P : [{ cat: "Viandes", lib: "Exemple : poulet mariné", fourn: "Nouméa Surgelés", code: "", cond: "Carton 10 kg", parCond: 10, unite: "kg", prixCond: 0, min: 5 }])
+      .map((p) => ({ Produit: p.lib, Catégorie: p.cat || "", Fournisseur: p.fourn || "", Code: p.code || "", Conditionnement: p.cond || "", "Unités par colis": num(p.parCond) || 1, Unité: p.unite || "unité", "Prix colis HT": num(p.prixCond) || "", Seuil: num(p.min) || "" }));
+    const ws = XLSX.utils.json_to_sheet(rows); ws["!cols"] = [{ wch: 34 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 18 }, { wch: 15 }, { wch: 10 }, { wch: 14 }, { wch: 8 }];
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Produits");
+    enregistrerFichier(nomFichier(`Produits_stock_${nom}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+  };
+  $("#stListeB").onclick = () => $("#stListe").click();
+  $("#stListe").onchange = (e) => {
+    const f = e.target.files[0]; if (!f) return; const fr = new FileReader();
+    fr.onload = () => {
+      try {
+        const lus = lireListeProduits(XLSX.read(fr.result, { type: "array" }));
+        if (!lus.length) { toast("Aucun produit trouvé : il faut une colonne « Produit » (utilisez le modèle Excel)."); return; }
+        const { nv, maj } = fusionnerProduits(P, lus, "x"); S.stk.catSource = `${f.name} (importé le ${frDate(jourLocal())})`;
+        toast(`${nv} produit(s) ajouté(s), ${maj} mis à jour. Pensez à enregistrer.`); render();
+      } catch (err) { toast("Lecture du fichier impossible : " + (err.message || err)); }
+    };
+    fr.readAsArrayBuffer(f); e.target.value = "";
+  };
+  const dep = $("#stDepart"); if (dep) dep.onclick = () => {
+    const lus = depart.flatMap(([cat, L]) => L.map((x) => { const [lib, unite] = x.split("|"); return { lib, cat, unite }; }));
+    const { nv } = fusionnerProduits(P, lus, "d"); toast(nv ? `${nv} produit(s) ajouté(s) sans prix : complétez les prix et conditionnements, puis enregistrez.` : "Tous ces produits sont déjà dans la liste."); render();
+  };
+  const cs = $("#stCopieSoc"); if (cs) cs.onchange = async () => {
+    const id = cs.value; if (!id) return;
+    try { const d = await S.db.doc(`stock/${id}_cat`).get(); const L = d.exists ? d.data().produits || [] : [];
+      if (!L.length) { toast("Ce restaurant n'a pas encore de liste de produits."); cs.value = ""; return; }
+      const { nv, maj } = fusionnerProduits(P, L.map(({ id: _i, ...x }) => x), "c"); toast(`${nv} produit(s) copié(s), ${maj} déjà présent(s). Pensez à enregistrer.`); render();
+    } catch (err) { toast("Copie impossible : " + (err.message || err)); cs.value = ""; }
+  };
+  const mb = $("#stMercB"); if (mb) mb.onclick = () => $("#stMerc").click();
+  if ($("#stMerc")) $("#stMerc").onchange = (e) => {
     const f = e.target.files[0]; if (!f) return; const fr = new FileReader();
     fr.onload = () => {
       try {
