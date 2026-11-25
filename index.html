@@ -162,6 +162,15 @@ table.pl td{padding:3px 4px;vertical-align:top;min-width:92px} table.pl td:first
 .modal{max-width:560px;width:100%;margin:0;max-height:90vh;overflow:auto}
 
 tr.dt-info td{border-top:0;padding-top:0;padding-bottom:10px}
+
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}.seg button{border:0;border-radius:0;background:transparent;padding:7px 12px;margin:0}.seg button+button{border-left:1px solid var(--line)}.seg button.on{background:var(--ink);color:var(--surface)}
+.stk-bar{margin:10px 0 4px}.stk-prog{height:6px;border-radius:4px;background:var(--soft);overflow:hidden;margin:8px 0}.stk-prog div{height:100%;background:#2f8f5b;transition:width .3s}
+details.stk-cat{border:1px solid var(--line);border-radius:10px;margin:10px 0;background:var(--surface)}details.stk-cat>summary{display:flex;gap:10px;align-items:center;padding:10px 14px;cursor:pointer;list-style:none;background:var(--soft);border-radius:10px}details.stk-cat[open]>summary{border-radius:10px 10px 0 0;border-bottom:1px solid var(--line)}details.stk-cat>summary::-webkit-details-marker{display:none}details.stk-cat>summary::before{content:"▸";font-size:12px;transition:transform .15s}details.stk-cat[open]>summary::before{transform:rotate(90deg)}
+.stk-head,.stk-row{display:grid;grid-template-columns:minmax(180px,2.2fr) 1fr 1.1fr 1.2fr .8fr 1.2fr;gap:10px;align-items:center;padding:8px 14px}.stk-head{padding-top:6px;padding-bottom:2px}.stk-row{border-top:1px solid var(--line)}.stk-row.al{background:color-mix(in srgb,var(--bad) 6%,transparent)}
+.stk-p{display:flex;flex-direction:column;gap:1px;min-width:0}.stk-p b{overflow:hidden;text-overflow:ellipsis}.stk-in{display:flex;align-items:center;gap:5px;justify-content:flex-end;margin:0}.stk-in input{width:5.5em;font-size:15px;padding:7px 8px;text-align:right}.stk-in span{font-size:12px;color:var(--muted);width:4.6em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cat-head,.cat-row{display:grid;grid-template-columns:minmax(180px,2.2fr) 1.4fr 1fr 1fr .8fr .6fr;gap:10px;align-items:center;padding:9px 14px}.cat-head{padding-top:6px;padding-bottom:2px}.cat-row{border-top:1px solid var(--line);cursor:pointer}.cat-row:hover,.cat-row:focus{background:var(--soft);outline:none}.cat-row>div:first-child{display:flex;flex-direction:column;min-width:0}
+details.menu{position:relative}details.menu>summary{list-style:none;cursor:pointer;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}details.menu>summary::-webkit-details-marker{display:none}.menu-list{position:absolute;right:0;top:calc(100% + 4px);z-index:15;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);display:flex;flex-direction:column;min-width:270px;padding:6px}.menu-list button{border:0;background:transparent;text-align:left;padding:8px 10px;margin:0;border-radius:6px}.menu-list button:hover{background:var(--soft)}.menu-list select{width:100%;margin-top:4px}
+@media (max-width:760px){.stk-head,.cat-head{display:none}.stk-row{grid-template-columns:1fr 1fr;gap:6px 10px}.stk-row .stk-p{grid-column:1/-1}.stk-row [data-lab]::before{content:attr(data-lab);display:block;font-size:11px;color:var(--muted)}.stk-in{justify-content:flex-start}.cat-row{grid-template-columns:1fr auto;gap:4px 10px}.cat-row>div:nth-child(2),.cat-row>div:nth-child(5){display:none}.cat-row>div:last-child{display:none}}
 </style>
 </head>
 <body>
@@ -187,13 +196,13 @@ tr.dt-info td{border-top:0;padding-top:0;padding-bottom:10px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="supabase-config.js?v=20261124b"></script>
-<script src="supa-db.js?v=20261124b"></script>
-<script src="core.js?v=20261124b"></script>
-<script src="contrats.js?v=20261124b"></script>
-<script src="docx.js?v=20261124b"></script>
-<script src="cafat.js?v=20261124b"></script>
-<script src="app.js?v=20261124b"></script>
+<script src="supabase-config.js?v=20261125a"></script>
+<script src="supa-db.js?v=20261125a"></script>
+<script src="core.js?v=20261125a"></script>
+<script src="contrats.js?v=20261125a"></script>
+<script src="docx.js?v=20261125a"></script>
+<script src="cafat.js?v=20261125a"></script>
+<script src="app.js?v=20261125a"></script>
 <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});</script>
 </body>
 </html>

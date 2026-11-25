@@ -1915,73 +1915,80 @@ function lignesStock(date) {
     return { p, cS: cS ?? "", eS: eS ?? "", compte, entrees, prec, precDate: av[p.id] && av[p.id].d, conso, ref, valeur: ref !== null ? ref * prixUnite(p) : 0, etat: etatStock(p, ref) };
   });
 }
+function enteteStock(nom, extra) {
+  const ong = [["inv", "Inventaire du jour"], ["cat", "Produits"], ["hist", "Historique"]];
+  return `<div class="row" style="flex-wrap:wrap;align-items:center"><h2 class="grow" style="margin:0">Stock · ${esc(nom)}</h2>
+    <div class="seg" role="tablist">${ong.map(([k, l]) => `<button role="tab" aria-selected="${S.stkVue === k}" class="${S.stkVue === k ? "on" : ""}" data-sv="${k}">${l}</button>`).join("")}</div></div>${extra || ""}`;
+}
+S.stkOpen = S.stkOpen || {}; S.stkSave = { tm: null, etat: "" };
 function renderStock(v) {
   chargerStock();
   if (!S.stk || S.stk.charge) { v.innerHTML = `<div class="panel"><p class="muted">Chargement du stock…</p></div>`; return; }
   if (S.stk.erreur) { v.innerHTML = `<div class="panel">Lecture impossible : ${esc(S.stk.erreur)}</div>`; return; }
   const nom = (socDoc() || {}).enseigne || ENSEIGNES[S.soc] || S.soc;
-  const tabs = `<div class="row" style="gap:6px"><button class="${S.stkVue === "inv" ? "primary" : ""}" data-sv="inv">Inventaire du jour</button><button class="${S.stkVue === "cat" ? "primary" : ""}" data-sv="cat">Produits & seuils</button><button class="${S.stkVue === "hist" ? "primary" : ""}" data-sv="hist">Historique</button></div>`;
   const lier = () => v.querySelectorAll("[data-sv]").forEach((b) => (b.onclick = () => { S.stkVue = b.dataset.sv; render(); }));
   if (!(S.stk.cat.produits || []).length && S.stkVue !== "cat") S.stkVue = "cat";
-  if (S.stkVue === "cat") { renderStockCatalogue(v, nom, tabs); lier(); return; }
-  if (S.stkVue === "hist") { renderStockHist(v, nom, tabs); lier(); return; }
+  if (S.stkVue === "cat") { renderStockCatalogue(v, nom); lier(); return; }
+  if (S.stkVue === "hist") { renderStockHist(v, nom, enteteStock(nom)); lier(); return; }
   const date = S.stkDate || (S.stkDate = jourLocal());
-  const L = lignesStock(date), F0 = S.stkF;
-  const valeur = L.reduce((a, l) => a + l.valeur, 0), alertes = L.filter((l) => l.etat.cls === "bad" || l.etat.cls === "warn");
+  const L = lignesStock(date), F0 = S.stkF; F0.vue = F0.vue || "tous";
+  const alerte = (l) => l.etat.cls === "bad" || l.etat.cls === "warn";
+  const valeur = L.reduce((a, l) => a + l.valeur, 0), alertes = L.filter(alerte);
   const consoVal = L.reduce((a, l) => a + (l.conso > 0 ? l.conso * prixUnite(l.p) : 0), 0), comptes = L.filter((l) => l.compte !== null).length;
   const recVal = L.reduce((a, l) => a + l.entrees * prixUnite(l.p), 0);
-  const vis = L.filter((l) => (!F0.alerte || l.etat.cls === "bad" || l.etat.cls === "warn") && (!F0.txt || `${l.p.lib} ${l.p.code} ${l.p.fourn} ${l.p.cat}`.toLowerCase().includes(F0.txt.toLowerCase())));
-  const cats = [...new Set(vis.map((l) => l.p.cat || "Divers"))];
-  const sale = Object.keys(S.stk.edit).length > 0, deja = !!S.stk.invs[date];
-  v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Stock — ${esc(nom)}</h2>${tabs}</div>
-    <div class="row" style="flex-wrap:wrap">
-      <label class="small">Date <input type="date" id="stDate" value="${date}"></label>
-      <button id="stPrev" title="Jour précédent">◀</button><button id="stNext" title="Jour suivant">▶</button>
-      <input id="stTxt" placeholder="Rechercher un produit…" value="${esc(F0.txt)}" style="width:14em">
-      <label class="check small"><input type="checkbox" id="stAl" ${F0.alerte ? "checked" : ""}> Seulement les alertes</label>
+  const txt = normLib(F0.txt || "");
+  const vis = L.filter((l) => (F0.vue === "tous" || (F0.vue === "acompter" && l.compte === null) || (F0.vue === "alertes" && alerte(l))) && (!txt || normLib(`${l.p.lib} ${l.p.code} ${l.p.fourn} ${l.p.cat}`).includes(txt)));
+  const cats = [...new Set(vis.map((l) => l.p.cat || "Divers"))].sort();
+  const auj = jourLocal(), pctC = L.length ? Math.round(comptes / L.length * 100) : 0;
+  const etatSave = S.stkSave.etat || (S.stk.invs[date] && S.stk.invs[date].le ? `Enregistré · ${new Date(S.stk.invs[date].le).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}${S.stk.invs[date].par ? " par " + S.stk.invs[date].par : ""}` : "Rien de saisi ce jour");
+  v.innerHTML = `<div class="panel">${enteteStock(nom)}
+    <div class="row stk-bar" style="flex-wrap:wrap;gap:8px;align-items:center">
+      <div class="row" style="gap:4px"><button id="stPrev" aria-label="Jour précédent">◀</button><input type="date" id="stDate" value="${date}" aria-label="Date de l'inventaire"><button id="stNext" aria-label="Jour suivant">▶</button>${date !== auj ? `<button id="stAuj" class="link">Aujourd'hui</button>` : ""}</div>
+      <input id="stTxt" type="search" placeholder="Rechercher un produit…" value="${esc(F0.txt || "")}" style="width:15em">
+      <div class="seg small">${[["tous", "Tous"], ["acompter", `À compter (${L.length - comptes})`], ["alertes", `Alertes (${alertes.length})`]].map(([k, l]) => `<button data-vue="${k}" class="${F0.vue === k ? "on" : ""}">${l}</button>`).join("")}</div>
       <span class="grow"></span>
-      <button id="stCmd" ${alertes.length ? "" : "disabled"}>Bon de commande (Excel)</button><button id="stXlsx">Export Excel</button>
-      <button class="primary" id="stSave">${sale ? "Enregistrer l'inventaire" : deja ? "Inventaire enregistré ✓" : "Enregistrer l'inventaire"}</button>
+      <button id="stCmd" ${alertes.some((l) => l.etat.cmd) ? "" : "disabled"}>Bon de commande</button><button id="stXlsx">Export Excel</button>
     </div>
     <div class="kpis">
-      <div class="kpi"><b>${F(Math.round(valeur))}</b><span>Valeur du stock (F HT)</span></div>
-      <div class="kpi"><b class="${alertes.length ? "neg" : "pos"}">${alertes.length}</b><span>Produit(s) en rupture ou sous le seuil</span></div>
-      <div class="kpi"><b>${F(Math.round(consoVal))}</b><span>Consommation du jour (F HT)</span></div>
-      <div class="kpi"><b>${F(Math.round(recVal))}</b><span>Réceptions du jour (F HT)</span></div>
-      <div class="kpi"><b>${comptes} / ${L.length}</b><span>Produits comptés ce jour</span></div>
+      <div class="kpi"><b>${F(Math.round(valeur))} F</b><span>Valeur du stock (HT)</span></div>
+      <div class="kpi"><b class="${alertes.length ? "neg" : "pos"}">${alertes.length}</b><span>En rupture ou sous le seuil</span></div>
+      <div class="kpi"><b>${F(Math.round(consoVal))} F</b><span>Consommation du jour</span></div>
+      <div class="kpi"><b>${F(Math.round(recVal))} F</b><span>Réceptions du jour</span></div>
     </div>
-    <p class="small muted" style="margin:0">Chaque jour : saisissez les <b>réceptions</b> (en colis livrés) et le <b>stock compté</b> en fin de service (dans l'unité indiquée). La consommation = stock précédent + réceptions − stock compté. Un produit non compté reprend le dernier stock connu.</p>
-    <div class="tbl-wrap"><table class="stk"><thead><tr><th>Produit</th><th>Unité</th><th class="num">Stock préc.</th><th class="num">Réception (colis)</th><th class="num">Stock compté</th><th class="num">Conso</th><th class="num">Valeur</th><th>État</th></tr></thead><tbody>
-    ${cats.map((c) => `<tr><td colspan="8" style="background:var(--soft)"><b>${esc(c)}</b></td></tr>` + vis.filter((l) => (l.p.cat || "Divers") === c).map((l) => `<tr>
-      <td>${esc(l.p.lib)}<div class="small muted">${esc(l.p.fourn || "")}${l.p.code ? " · " + esc(l.p.code) : ""}</div></td>
-      <td class="small">${esc(l.p.unite || "unité")}${num(l.p.parCond) > 1 ? `<div class="muted">colis = ${qte(l.p.parCond)}</div>` : ""}</td>
-      <td class="num">${l.prec !== null ? qte(l.prec) : "—"}${l.precDate ? `<div class="small muted">${esc(frDate(l.precDate).slice(0, 5))}</div>` : ""}</td>
-      <td class="num"><input inputmode="decimal" data-e="${esc(l.p.id)}" value="${esc(String(l.eS).replace(".", ","))}" style="width:5em;text-align:right" aria-label="Réception ${esc(l.p.lib)}"></td>
-      <td class="num"><input inputmode="decimal" data-c="${esc(l.p.id)}" value="${esc(String(l.cS).replace(".", ","))}" style="width:6em;text-align:right" aria-label="Stock compté ${esc(l.p.lib)}"></td>
-      <td class="num${l.conso < 0 ? " neg" : ""}">${l.conso !== null ? qte(l.conso) : ""}</td>
-      <td class="num">${l.ref !== null ? F(Math.round(l.valeur)) : ""}</td>
-      <td>${l.etat.cls ? `<span class="chip ${l.etat.cls}">${l.etat.lib}</span>` : '<span class="small muted">non compté</span>'}${l.etat.cmd ? `<div class="small muted">commander ${l.etat.cmd} colis</div>` : ""}</td></tr>`).join("")).join("") || `<tr><td colspan="8" class="muted">Aucun produit pour ces critères.</td></tr>`}
-    </tbody></table></div>
-    ${L.some((l) => l.conso < 0) ? `<p class="small" style="margin:0;color:var(--bad)">Une consommation négative signale un stock compté supérieur au stock attendu : réception oubliée ou erreur de comptage.</p>` : ""}
+    <div class="stk-prog" aria-label="Produits comptés"><div style="width:${pctC}%"></div></div>
+    <div class="row small" style="justify-content:space-between;margin-top:-4px"><span><b>${comptes}</b> / ${L.length} produits comptés ce jour</span><span class="muted" id="stEtat">${esc(etatSave)}</span></div>
+    ${cats.map((c) => { const Lc = vis.filter((l) => (l.p.cat || "Divers") === c), nc = Lc.filter((l) => l.compte !== null).length, na = Lc.filter(alerte).length, ouvert = S.stkOpen[c] !== false;
+      return `<details class="stk-cat" data-cat="${esc(c)}" ${ouvert ? "open" : ""}><summary><b>${esc(c)}</b><span class="small muted">${nc}/${Lc.length} comptés</span>${na ? `<span class="chip bad">${na} alerte${na > 1 ? "s" : ""}</span>` : ""}</summary>
+        <div class="stk-head small muted"><span>Produit</span><span class="num">Dernier stock</span><span class="num">Reçu (colis)</span><span class="num">Compté</span><span class="num">Conso</span><span>État</span></div>
+        ${Lc.map((l) => `<div class="stk-row ${alerte(l) ? "al" : ""}">
+          <div class="stk-p"><b>${esc(l.p.lib)}</b><span class="small muted">${[l.p.fourn, num(l.p.parCond) > 1 ? `colis de ${qte(l.p.parCond)} ${esc(l.p.unite || "")}` : l.p.cond].filter(Boolean).map(esc).join(" · ")}</span></div>
+          <div class="num" data-lab="Dernier stock">${l.prec !== null ? `${qte(l.prec)} <span class="small muted">${esc(l.p.unite || "")}</span>${l.precDate && l.precDate !== plAdd(date, -1) ? `<div class="small muted">${frDate(l.precDate).slice(0, 5)}</div>` : ""}` : '<span class="muted">—</span>'}</div>
+          <label class="num stk-in" data-lab="Reçu"><input inputmode="decimal" data-e="${esc(l.p.id)}" value="${esc(String(l.eS).replace(".", ","))}" placeholder="0" aria-label="Colis reçus : ${esc(l.p.lib)}"><span>colis</span></label>
+          <label class="num stk-in" data-lab="Compté"><input inputmode="decimal" data-c="${esc(l.p.id)}" value="${esc(String(l.cS).replace(".", ","))}" placeholder="—" aria-label="Stock compté : ${esc(l.p.lib)}"><span title="${esc(l.p.unite || "")}">${esc(l.p.unite || "u.")}</span></label>
+          <div class="num ${l.conso < 0 ? "neg" : ""}" data-lab="Conso">${l.conso !== null ? qte(l.conso) : '<span class="muted">—</span>'}</div>
+          <div data-lab="État">${l.etat.cls ? `<span class="chip ${l.etat.cls}">${l.etat.lib}</span>` : '<span class="small muted">non compté</span>'}${l.etat.cmd ? `<div class="small muted">commander ${l.etat.cmd} colis</div>` : ""}</div>
+        </div>`).join("")}</details>`; }).join("") || `<p class="muted">Aucun produit pour ces critères.</p>`}
+    <p class="small muted" style="margin:6px 0 0">Saisissez les <b>colis reçus</b> et le <b>stock compté</b> en fin de service : tout s'enregistre automatiquement. Entrée passe au produit suivant. Consommation = dernier stock + réceptions − stock compté ; un produit non compté reprend le dernier stock connu.${L.some((l) => l.conso < 0) ? ' <span style="color:var(--bad)">Une consommation négative signale une réception oubliée ou une erreur de comptage.</span>' : ""}</p>
   </div>`;
   lier();
-  const allerA = (d) => { if (Object.keys(S.stk.edit).length && !confirm("Des saisies ne sont pas enregistrées. Changer de jour quand même ?")) return; S.stk.edit = {}; S.stkDate = d; render(); };
+  const allerA = (d) => { S.stkDate = d; S.stkSave.etat = ""; render(); };
   $("#stDate").onchange = (e) => e.target.value && allerA(e.target.value);
-  const decal = (n) => { const d = new Date(date + "T12:00:00"); d.setDate(d.getDate() + n); allerA(jourLocal(d)); };
-  $("#stPrev").onclick = () => decal(-1); $("#stNext").onclick = () => decal(1);
-  $("#stAl").onchange = (e) => { F0.alerte = e.target.checked; render(); };
-  let tm; $("#stTxt").oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { F0.txt = e.target.value; render(); const i = $("#stTxt"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 350); };
-  v.querySelectorAll("[data-c],[data-e]").forEach((i) => {
-    i.onchange = () => { const k = i.dataset.c ? "c_" + i.dataset.c : "e_" + i.dataset.e; S.stk.edit[k] = i.value.trim() === "" ? "" : num(i.value); const y = window.scrollY, id = k; render(); window.scrollTo(0, y); const n = v.querySelector(`[data-${id[0]}="${CSS.escape(id.slice(2))}"]`); const all = [...v.querySelectorAll("[data-c],[data-e]")]; const nx = all[all.indexOf(n) + 1]; if (nx) nx.focus(); };
-    i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); i.blur(); } };
+  $("#stPrev").onclick = () => allerA(plAdd(date, -1)); $("#stNext").onclick = () => allerA(plAdd(date, 1));
+  const ba = $("#stAuj"); if (ba) ba.onclick = () => allerA(auj);
+  v.querySelectorAll("[data-vue]").forEach((b) => (b.onclick = () => { F0.vue = b.dataset.vue; render(); }));
+  v.querySelectorAll("details.stk-cat").forEach((d) => (d.ontoggle = () => { S.stkOpen[d.dataset.cat] = d.open; }));
+  let tm; $("#stTxt").oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { F0.txt = e.target.value; render(); const i = $("#stTxt"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
+  const ins = [...v.querySelectorAll("[data-c],[data-e]")];
+  ins.forEach((i, idx) => {
+    i.onfocus = () => i.select();
+    i.onchange = () => {
+      const k = i.dataset.c ? "c_" + i.dataset.c : "e_" + i.dataset.e; S.stk.edit[k] = i.value.trim() === "" ? "" : num(i.value);
+      sauverInventaire(date);
+      setTimeout(() => { const a = document.activeElement, key = a && (a.dataset.c ? "c" + a.dataset.c : a.dataset.e ? "e" + a.dataset.e : null), y = window.scrollY; render(); window.scrollTo(0, y);
+        if (key) { const n = v.querySelector(key[0] === "c" ? `[data-c="${CSS.escape(key.slice(1))}"]` : `[data-e="${CSS.escape(key.slice(1))}"]`); if (n) n.focus(); } }, 0);
+    };
+    i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); const same = ins.filter((x) => !!x.dataset.c === !!i.dataset.c), nx = same[same.indexOf(i) + 1]; if (nx) nx.focus(); else i.blur(); } };
   });
-  $("#stSave").onclick = async () => {
-    const inv = S.stk.invs[date] || {}, comptes = { ...(inv.comptes || {}) }, entrees = { ...(inv.entrees || {}) };
-    Object.entries(S.stk.edit).forEach(([k, val]) => { const t = k[0] === "c" ? comptes : entrees, id = k.slice(2); if (val === "") delete t[id]; else t[id] = val; });
-    const doc = { societe: S.soc, date, comptes, entrees, par: (S.profil && S.profil.nom) || "", le: new Date().toISOString() };
-    try { await S.db.doc(`stock/${S.soc}_${date}`).set(doc); S.stk.invs[date] = { id: `${S.soc}_${date}`, ...doc }; S.stk.edit = {}; toast(`Inventaire du ${frDate(date)} enregistré.`); render(); }
-    catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
-  };
   $("#stXlsx").onclick = () => {
     const rows = L.map((l) => ({ Catégorie: l.p.cat, Produit: l.p.lib, Fournisseur: l.p.fourn || "", Code: l.p.code || "", Unité: l.p.unite, "Stock précédent": l.prec ?? "", "Réception (unités)": l.entrees || "", "Stock compté": l.compte ?? "", Consommation: l.conso ?? "", "Prix unitaire HT": Math.round(prixUnite(l.p)), "Valeur HT": Math.round(l.valeur), Seuil: num(l.p.min) || "", État: l.etat.lib }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Stock " + frDate(date).replace(/\//g, "-"));
@@ -1994,7 +2001,20 @@ function renderStock(v) {
     enregistrerFichier(nomFichier(`Commande_${nom}_${date}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
   };
 }
-function renderStockHist(v, nom, tabs) {
+/* Enregistrement automatique de l'inventaire du jour (regroupe les frappes rapprochées) */
+function sauverInventaire(date) {
+  S.stkSave.etat = "Enregistrement…"; const e = $("#stEtat"); if (e) e.textContent = S.stkSave.etat;
+  clearTimeout(S.stkSave.tm);
+  S.stkSave.tm = setTimeout(async () => {
+    const inv = S.stk.invs[date] || {}, comptes = { ...(inv.comptes || {}) }, entrees = { ...(inv.entrees || {}) }, edit = S.stk.edit; S.stk.edit = {};
+    Object.entries(edit).forEach(([k, val]) => { const t = k[0] === "c" ? comptes : entrees, id = k.slice(2); if (val === "") delete t[id]; else t[id] = val; });
+    const doc = { societe: S.soc, date, comptes, entrees, par: (S.profil && S.profil.nom) || "", le: new Date().toISOString() };
+    try { await S.db.doc(`stock/${S.soc}_${date}`).set(doc); S.stk.invs[date] = { id: `${S.soc}_${date}`, ...doc }; S.stkSave.etat = `Enregistré · ${new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`; }
+    catch (err) { Object.assign(S.stk.edit, edit); S.stkSave.etat = "Non enregistré : " + (err.message || err); toast("Inventaire non enregistré : " + (err.message || err)); }
+    const el = $("#stEtat"); if (el) el.textContent = S.stkSave.etat;
+  }, 600);
+}
+function renderStockHist(v, nom, tete) {
   const dates = Object.keys(S.stk.invs).sort().reverse(), P = S.stk.cat.produits || [];
   const ligne = (d) => {
     const inv = S.stk.invs[d], av = stockAvant(d); let val = 0, conso = 0, rec = 0;
@@ -2006,7 +2026,7 @@ function renderStockHist(v, nom, tabs) {
     });
     return `<tr><td><button class="link" data-hd="${d}">${esc(frDate(d))}</button></td><td class="num">${Object.keys(inv.comptes || {}).length}</td><td class="num">${F(Math.round(rec))}</td><td class="num">${F(Math.round(conso))}</td><td class="num">${F(Math.round(val))}</td><td class="small">${esc(inv.par || "")}</td></tr>`;
   };
-  v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Stock — ${esc(nom)}</h2>${tabs}</div>
+  v.innerHTML = `<div class="panel">${tete}
     <div class="tbl-wrap"><table><thead><tr><th>Date</th><th class="num">Produits comptés</th><th class="num">Réceptions HT</th><th class="num">Consommation HT</th><th class="num">Valeur du stock</th><th>Saisi par</th></tr></thead><tbody>
     ${dates.map(ligne).join("") || `<tr><td colspan="6" class="muted">Aucun inventaire enregistré pour l'instant.</td></tr>`}</tbody></table></div></div>`;
   v.querySelectorAll("[data-hd]").forEach((b) => (b.onclick = () => { S.stkDate = b.dataset.hd; S.stkVue = "inv"; S.stk.edit = {}; render(); }));
@@ -2087,104 +2107,120 @@ function fusionnerProduits(P, lus, idPrefix) {
   });
   return { nv, maj };
 }
-function renderStockCatalogue(v, nom, tabs) {
-  const P = (S.stk.catEdit || (S.stk.catEdit = JSON.parse(JSON.stringify(S.stk.cat.produits || [])).sort((a, b) => (a.cat || "").localeCompare(b.cat || "") || a.lib.localeCompare(b.lib))));
-  const cats = [...new Set(P.map((p) => p.cat || "Divers"))].sort();
-  const tri = (L) => JSON.stringify([...L].sort((a, b) => a.id.localeCompare(b.id))); const sale = tri(P) !== tri(S.stk.cat.produits || []);
-  const marque = document.documentElement.dataset.marque || "", estColumbus = marque === "columbus" || P.some((p) => p.source === "newrest");
-  const depart = LISTES_DEPART[marque];
-  const autres = S.admin ? S.socs.filter((x) => x.id !== S.soc) : [];
-  v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Stock — ${esc(nom)}</h2>${tabs}</div>
-    <div class="row" style="flex-wrap:wrap">
-      <input type="file" id="stListe" accept=".xlsx,.xls,.csv" hidden>
-      <button id="stModele" title="Fichier Excel à remplir avec vos produits et vos prix (vos produits actuels y sont déjà)">Télécharger le modèle Excel</button>
-      <button id="stListeB">Importer la liste (Excel)</button>
-      ${depart ? `<button id="stDepart" title="Ajoute une liste type de produits ${marque === "chamas" ? "Chamas Tacos" : "pizzeria"}, sans prix">Ajouter la liste type ${marque === "chamas" ? "Chamas Tacos" : "pizzeria"}</button>` : ""}
-      ${autres.length ? `<select id="stCopieSoc" aria-label="Restaurant à copier"><option value="">Copier la liste d'un autre restaurant…</option>${autres.map((x) => `<option value="${esc(x.id)}">${esc(x.enseigne || ENSEIGNES[x.id] || x.nom)}</option>`).join("")}</select>` : ""}
-      ${estColumbus ? `<input type="file" id="stMerc" accept=".xlsx,.xls" hidden><button id="stMercB">Importer une mercuriale (Excel)</button>
-      <label class="check small"><input type="checkbox" id="stEur" checked> Prix de la mercuriale en euros (× ${String(EUR_XPF).replace(".", ",")})</label>` : ""}
-      <span class="grow"></span><button id="stCatX">Export des coûts (Excel)</button><button id="stAdd">+ Ajouter un produit</button>
-      <button class="primary" id="stCatSave" ${sale ? "" : "disabled"}>${sale ? "Enregistrer les produits" : "Produits enregistrés ✓"}</button>
+async function sauverCatalogue(P, msg) {
+  const doc = { ...S.stk.cat, societe: S.soc, produits: P, majLe: new Date().toISOString() }; delete doc.id;
+  if (S.stk.catSource) doc.source = S.stk.catSource;
+  try { await S.db.doc(`stock/${S.soc}_cat`).set(doc); S.stk.cat = doc; S.stk.catSource = null; if (msg) toast(msg); return true; }
+  catch (e) { toast("Enregistrement impossible : " + (e.message || e)); return false; }
+}
+function ficheProduit(P, p, estColumbus, apres) {
+  const nouveau = !p; p = p || { id: "p" + Date.now().toString(36), lib: "", cat: S.stkF.dernCat || "", fourn: "", code: "", cond: "", parCond: 1, unite: "kg", prixCond: 0, min: 0 };
+  const cats = [...new Set(P.map((x) => x.cat || "Divers"))].sort(), fourns = [...new Set(P.map((x) => x.fourn).filter(Boolean))].sort();
+  const dlg = document.createElement("div"); dlg.className = "modal-fond";
+  dlg.innerHTML = `<form class="panel modal" role="dialog" aria-label="Fiche produit" style="max-width:620px"><h2>${nouveau ? "Nouveau produit" : "Modifier le produit"}</h2>
+    <datalist id="fpCats">${cats.map((c) => `<option value="${esc(c)}">`).join("")}</datalist><datalist id="fpFourns">${fourns.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+    <div class="form">
+      <label style="grid-column:1/-1">Nom du produit<input name="lib" required value="${esc(p.lib)}" placeholder="ex. Poulet mariné"></label>
+      <label>Catégorie<input name="cat" list="fpCats" value="${esc(p.cat || "")}" placeholder="ex. Viandes"></label>
+      <label>Fournisseur<input name="fourn" list="fpFourns" value="${esc(p.fourn || "")}" placeholder="ex. Nouméa Surgelés"></label>
+      <label>Conditionnement<input name="cond" value="${esc(p.cond || "")}" placeholder="ex. Carton 10 kg"></label>
+      <label>Unité de comptage<input name="unite" value="${esc(p.unite || "")}" placeholder="kg, unité, l, sachet…"></label>
+      <label>Unités par colis<input name="parCond" inputmode="decimal" value="${esc(qte(p.parCond || 1))}"></label>
+      <label>Prix du colis HT (F)<input name="prixCond" class="mt" inputmode="numeric" value="${num(p.prixCond) ? esc(fmtMt(p.prixCond)) : ""}" placeholder="à renseigner"></label>
+      <label>Seuil d'alerte (en unités)<input name="min" inputmode="decimal" value="${num(p.min) ? esc(qte(p.min)) : ""}" placeholder="0"></label>
+      <label>Code / référence<input name="code" value="${esc(p.code || "")}"></label>
     </div>
-    ${S.stk.cat.source ? `<p class="small muted" style="margin:0">Source : ${esc(S.stk.cat.source)}</p>` : ""}
-    <p class="small muted" style="margin:0">${estColumbus ? "" : "Le plus rapide : téléchargez le modèle Excel, remplissez-le avec vos produits et les prix de vos fournisseurs (Serdis, Nouméa Surgelés, Bargibant…), puis importez-le. Vous pouvez aussi partir de la liste type ou copier la liste d'un autre restaurant, puis corriger directement dans le tableau. "}Le <b>prix colis</b> est le prix HT payé pour un conditionnement (carton, sac, bidon…) ; le coût par unité en découle. Le <b>seuil</b> est le stock minimum (dans l'unité de comptage) en dessous duquel une alerte apparaît ; la commande suggérée remonte le stock à deux fois le seuil.</p>
-    ${!estColumbus && P.some((p) => !num(p.prixCond)) ? `<p class="small" style="margin:0;color:var(--warn,#b45309)">${P.filter((p) => !num(p.prixCond)).length} produit(s) sans prix : complétez la colonne « Prix colis » pour connaître vos coûts.</p>` : ""}
-    <datalist id="stCats">${cats.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
-    <div class="tbl-wrap"><table class="stk"><thead><tr><th>Produit</th>${estColumbus ? `<th class="num">Prix PR Newrest<div class="small muted">F CFP HT</div></th>` : ""}<th class="num">Coût / unité<div class="small muted">F CFP HT</div></th><th class="num">Prix colis<div class="small muted">F CFP HT</div></th><th>Catégorie</th><th>Fournisseur</th><th>Code</th><th>Conditionnement</th><th class="num">Unités / colis</th><th>Unité de comptage</th><th class="num">Seuil</th><th></th></tr></thead><tbody>
-    ${P.map((p, i) => `<tr>
-      <td><input data-pf="lib" data-i="${i}" value="${esc(p.lib)}" style="min-width:17em"></td>
-      ${estColumbus ? `<td class="num">${p.source === "newrest" ? `<b>${coutU(num(p.prixNR))} F</b><div class="small muted">${esc((p.uniteNR || "").toLowerCase())}</div>` : `<span class="chip warn">pas dans les PR</span>`}</td>` : ""}
-      <td class="num" title="Prix du colis ÷ unités par colis">${coutU(prixUnite(p))} F<div class="small muted">/ ${esc(p.unite || "unité")}</div></td>
-      <td><input data-pf="prixCond" data-n="1" data-i="${i}" class="mt" value="${esc(num(p.prixCond) ? fmtMt(p.prixCond) : "")}" placeholder="à renseigner" style="width:7em;text-align:right">${srcChip(p)}</td>
-      <td><input data-pf="cat" data-i="${i}" value="${esc(p.cat || "")}" list="stCats" style="width:10em"></td>
-      <td><input data-pf="fourn" data-i="${i}" value="${esc(p.fourn || "")}" style="width:9em"></td>
-      <td><input data-pf="code" data-i="${i}" value="${esc(p.code || "")}" style="width:6em"></td>
-      <td><input data-pf="cond" data-i="${i}" value="${esc(p.cond || "")}" style="width:9em"></td>
-      <td><input data-pf="parCond" data-n="1" data-i="${i}" value="${esc(qte(p.parCond || 1))}" style="width:5em;text-align:right"></td>
-      <td><input data-pf="unite" data-i="${i}" value="${esc(p.unite || "")}" style="width:7em"></td>
-      <td><input data-pf="min" data-n="1" data-i="${i}" value="${esc(qte(p.min || 0))}" style="width:5em;text-align:right"></td>
-      <td><button class="link" data-pdel="${i}" title="Retirer ce produit">✕</button></td></tr>`).join("") || `<tr><td colspan="${estColumbus ? 12 : 11}" class="muted">Aucun produit pour l'instant. ${depart ? "Commencez par « Ajouter la liste type », ou " : ""}téléchargez le modèle Excel, remplissez-le puis importez-le.</td></tr>`}
-    </tbody></table></div></div>`;
-  v.querySelectorAll("[data-pf]").forEach((i) => (i.onchange = () => { P[i.dataset.i][i.dataset.pf] = i.dataset.n ? num(i.value) : i.value.trim(); if (i.dataset.pf === "prixCond") { P[i.dataset.i].source = "manuel"; delete P[i.dataset.i].coef; } const y = window.scrollY; render(); window.scrollTo(0, y); }));
-  v.querySelectorAll("[data-pdel]").forEach((b) => (b.onclick = () => { const p = P[b.dataset.pdel]; if (!confirm(`Retirer « ${p.lib} » de la liste ? Les inventaires passés restent conservés.`)) return; P.splice(Number(b.dataset.pdel), 1); render(); }));
-  $("#stAdd").onclick = () => { P.unshift({ id: "p" + Date.now().toString(36), lib: "Nouveau produit", cat: "Divers", fourn: "", code: "", cond: "", parCond: 1, unite: "unité", prixCond: 0, min: 0 }); render(); const i = v.querySelector('[data-pf="lib"]'); if (i) { i.focus(); i.select(); } };
-  $("#stCatX").onclick = () => {
-    const rows = P.map((p) => ({ Catégorie: p.cat, Produit: p.lib, Fournisseur: p.fourn || "", Code: p.code || "", Conditionnement: p.cond || "", "Unités / colis": num(p.parCond) || 1, "Unité": p.unite, "Prix PR Newrest (F CFP HT)": p.source === "newrest" ? num(p.prixNR) : "", "Unité PR Newrest": p.source === "newrest" ? p.uniteNR || "" : "", "Prix colis HT (F)": num(p.prixCond), "Coût unitaire HT (F)": Math.round(prixUnite(p) * 100) / 100, "Origine du prix": SRC_LIB[p.source] || "", Seuil: num(p.min) || "" }));
+    <p class="small muted" id="fpCout" style="margin:0"></p>
+    ${estColumbus && p.source === "newrest" ? `<p class="small muted" style="margin:0">Prix PR Newrest : ${coutU(num(p.prixNR))} F HT — ${esc(p.uniteNR || "")}</p>` : ""}
+    <div class="row"><button class="primary" type="submit">Enregistrer</button><button type="button" id="fpKo">Annuler</button><span class="grow"></span>${nouveau ? "" : `<button type="button" class="link" id="fpDel" style="color:var(--bad)">Supprimer ce produit</button>`}</div></form>`;
+  document.body.appendChild(dlg);
+  const f = dlg.querySelector("form"), fermer = () => dlg.remove();
+  const cout = () => { const pc = num(f.prixCond.value), q = num(f.parCond.value) || 1; dlg.querySelector("#fpCout").innerHTML = pc ? `Coût : <b>${coutU(pc / q)} F HT par ${esc(f.unite.value || "unité")}</b>` : "Indiquez le prix du colis pour connaître le coût par unité."; };
+  f.oninput = cout; cout(); setTimeout(() => (nouveau ? f.lib : f.prixCond).focus(), 30);
+  dlg.querySelector("#fpKo").onclick = fermer; dlg.onclick = (e) => { if (e.target === dlg) fermer(); };
+  dlg.onkeydown = (e) => { if (e.key === "Escape") fermer(); };
+  const del = dlg.querySelector("#fpDel"); if (del) del.onclick = async () => { if (!confirm(`Supprimer « ${p.lib} » ? Les inventaires passés restent conservés.`)) return; const i = P.findIndex((x) => x.id === p.id); if (i >= 0) P.splice(i, 1); if (await sauverCatalogue(P, "Produit supprimé.")) { fermer(); apres(); } };
+  f.onsubmit = async (e) => {
+    e.preventDefault(); if (!f.lib.value.trim()) return;
+    const n = { ...p, lib: f.lib.value.trim(), cat: f.cat.value.trim() || "Divers", fourn: f.fourn.value.trim(), cond: f.cond.value.trim(), unite: f.unite.value.trim() || "unité", parCond: num(f.parCond.value) || 1, min: num(f.min.value), code: f.code.value.trim() };
+    const pc = Math.round(num(f.prixCond.value)); if (pc !== Math.round(num(p.prixCond))) { n.prixCond = pc; n.source = "manuel"; delete n.coef; }
+    S.stkF.dernCat = n.cat;
+    const i = P.findIndex((x) => x.id === p.id); if (i >= 0) P[i] = n; else P.push(n);
+    if (await sauverCatalogue(P, nouveau ? "Produit ajouté." : "Produit enregistré.")) { fermer(); apres(); }
+  };
+}
+function renderStockCatalogue(v, nom) {
+  const P = JSON.parse(JSON.stringify(S.stk.cat.produits || []));
+  const marque = document.documentElement.dataset.marque || "", estColumbus = marque === "columbus" || P.some((p) => p.source === "newrest");
+  const depart = LISTES_DEPART[marque], autres = S.admin ? S.socs.filter((x) => x.id !== S.soc) : [];
+  const F0 = S.stkF, txt = normLib(F0.ptxt || ""), sansPrix = P.filter((p) => !num(p.prixCond));
+  const vis = P.filter((p) => (!F0.psp || !num(p.prixCond)) && (!txt || normLib(`${p.lib} ${p.fourn} ${p.cat} ${p.code}`).includes(txt)));
+  const cats = [...new Set(vis.map((p) => p.cat || "Divers"))].sort();
+  const valeurCat = P.length;
+  v.innerHTML = `<div class="panel">${enteteStock(nom)}
+    <div class="row stk-bar" style="flex-wrap:wrap;gap:8px;align-items:center">
+      <input id="pTxt" type="search" placeholder="Rechercher un produit, un fournisseur…" value="${esc(F0.ptxt || "")}" style="width:17em">
+      <label class="check small"><input type="checkbox" id="pSp" ${F0.psp ? "checked" : ""}> Sans prix (${sansPrix.length})</label>
+      <span class="grow"></span>
+      <details class="menu"><summary class="btn">Importer / exporter ▾</summary><div class="menu-list">
+        ${depart ? `<button id="stDepart">Ajouter la liste type ${marque === "chamas" ? "Chamas Tacos" : "pizzeria"}</button>` : ""}
+        <button id="stModele">Télécharger le modèle Excel</button>
+        <button id="stListeB">Importer une liste Excel</button><input type="file" id="stListe" accept=".xlsx,.xls,.csv" hidden>
+        ${autres.length ? `<label class="small" style="padding:6px 10px">Copier la liste de<select id="stCopieSoc"><option value="">— choisir —</option>${autres.map((x) => `<option value="${esc(x.id)}">${esc(x.enseigne || ENSEIGNES[x.id] || x.nom)}</option>`).join("")}</select></label>` : ""}
+        ${estColumbus ? `<button id="stMercB">Importer une mercuriale (prix en €)</button><input type="file" id="stMerc" accept=".xlsx,.xls" hidden>` : ""}
+        <button id="stCatX">Exporter les coûts (Excel)</button>
+      </div></details>
+      <button class="primary" id="stAdd">+ Nouveau produit</button>
+    </div>
+    <div class="row small muted" style="justify-content:space-between"><span>${valeurCat} produit(s)${sansPrix.length ? ` · <span style="color:var(--warn,#b45309)">${sansPrix.length} sans prix</span>` : ""}</span>${S.stk.cat.source ? `<span>Source : ${esc(S.stk.cat.source)}</span>` : ""}</div>
+    ${cats.map((c) => { const Lc = vis.filter((p) => (p.cat || "Divers") === c).sort((a, b) => a.lib.localeCompare(b.lib)), ouvert = S.stkOpen["p:" + c] !== false;
+      return `<details class="stk-cat" data-cat="p:${esc(c)}" ${ouvert ? "open" : ""}><summary><b>${esc(c)}</b><span class="small muted">${Lc.length} produit(s)</span></summary>
+        <div class="cat-head small muted"><span>Produit</span><span>Conditionnement</span><span class="num">Prix colis HT</span><span class="num">Coût / unité</span><span class="num">Seuil</span><span></span></div>
+        ${Lc.map((p) => `<div class="cat-row" data-pid="${esc(p.id)}" tabindex="0" role="button" aria-label="Modifier ${esc(p.lib)}">
+          <div><b>${esc(p.lib)}</b><span class="small muted">${[p.fourn, p.code].filter(Boolean).map(esc).join(" · ")}</span></div>
+          <div class="small">${esc(p.cond || "")}${num(p.parCond) > 1 ? `<span class="muted"> · ${qte(p.parCond)} ${esc(p.unite || "")}</span>` : !p.cond ? `<span class="muted">${esc(p.unite || "")}</span>` : ""}</div>
+          <div class="num">${num(p.prixCond) ? `${F(num(p.prixCond))} F` : '<span class="chip warn">à renseigner</span>'}${estColumbus ? (p.source === "newrest" ? '<div class="small muted">PR Newrest</div>' : p.source === "estimation" ? '<div class="small muted">estimé</div>' : "") : ""}</div>
+          <div class="num">${num(p.prixCond) ? `<b>${coutU(prixUnite(p))} F</b><span class="small muted"> / ${esc(p.unite || "u.")}</span>` : '<span class="muted">—</span>'}</div>
+          <div class="num">${num(p.min) ? `${qte(p.min)} <span class="small muted">${esc(p.unite || "")}</span>` : '<span class="muted">—</span>'}</div>
+          <div class="num"><span class="link">Modifier</span></div></div>`).join("")}</details>`; }).join("") || `<p class="muted">${P.length ? "Aucun produit pour ces critères." : `Aucun produit pour l'instant. ${depart ? "Ouvrez « Importer / exporter » puis « Ajouter la liste type », ou " : "Cliquez sur « + Nouveau produit », ou "}importez le modèle Excel rempli avec les prix de vos fournisseurs.`}</p>`}
+    <p class="small muted" style="margin:6px 0 0">Cliquez sur un produit pour le modifier. Le <b>prix colis</b> est le prix HT payé pour un conditionnement (carton, sac, bidon…) ; le coût par unité en découle. Le <b>seuil</b> déclenche l'alerte de stock bas ; la commande suggérée remonte le stock à deux fois le seuil. Les changements sont enregistrés aussitôt.</p>
+  </div>`;
+  const refaire = () => { const y = window.scrollY; render(); window.scrollTo(0, y); };
+  v.querySelectorAll("details.stk-cat").forEach((d) => (d.ontoggle = () => { S.stkOpen[d.dataset.cat] = d.open; }));
+  v.querySelectorAll(".cat-row").forEach((r) => { const ouvrir = () => ficheProduit(P, P.find((x) => x.id === r.dataset.pid), estColumbus, refaire); r.onclick = ouvrir; r.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ouvrir(); } }; });
+  $("#stAdd").onclick = () => ficheProduit(P, null, estColumbus, refaire);
+  $("#pSp").onchange = (e) => { F0.psp = e.target.checked; render(); };
+  let tm; $("#pTxt").oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { F0.ptxt = e.target.value; render(); const i = $("#pTxt"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
+  const fermerMenu = () => { const m = v.querySelector("details.menu"); if (m) m.open = false; };
+  $("#stCatX").onclick = () => { fermerMenu();
+    const rows = P.map((p) => ({ Catégorie: p.cat, Produit: p.lib, Fournisseur: p.fourn || "", Code: p.code || "", Conditionnement: p.cond || "", "Unités / colis": num(p.parCond) || 1, "Unité": p.unite, ...(estColumbus ? { "Prix PR Newrest (F CFP HT)": p.source === "newrest" ? num(p.prixNR) : "", "Unité PR Newrest": p.source === "newrest" ? p.uniteNR || "" : "" } : {}), "Prix colis HT (F)": num(p.prixCond), "Coût unitaire HT (F)": Math.round(prixUnite(p) * 100) / 100, "Origine du prix": SRC_LIB[p.source] || "", Seuil: num(p.min) || "" }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Coûts produits");
     enregistrerFichier(nomFichier(`Couts_produits_${nom}_${jourLocal()}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
   };
-  $("#stModele").onclick = () => {
+  $("#stModele").onclick = () => { fermerMenu();
     const rows = (P.length ? P : [{ cat: "Viandes", lib: "Exemple : poulet mariné", fourn: "Nouméa Surgelés", code: "", cond: "Carton 10 kg", parCond: 10, unite: "kg", prixCond: 0, min: 5 }])
       .map((p) => ({ Produit: p.lib, Catégorie: p.cat || "", Fournisseur: p.fourn || "", Code: p.code || "", Conditionnement: p.cond || "", "Unités par colis": num(p.parCond) || 1, Unité: p.unite || "unité", "Prix colis HT": num(p.prixCond) || "", Seuil: num(p.min) || "" }));
     const ws = XLSX.utils.json_to_sheet(rows); ws["!cols"] = [{ wch: 34 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 18 }, { wch: 15 }, { wch: 10 }, { wch: 14 }, { wch: 8 }];
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Produits");
     enregistrerFichier(nomFichier(`Produits_stock_${nom}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
   };
-  $("#stListeB").onclick = () => $("#stListe").click();
-  $("#stListe").onchange = (e) => {
-    const f = e.target.files[0]; if (!f) return; const fr = new FileReader();
-    fr.onload = () => {
-      try {
-        const lus = lireListeProduits(XLSX.read(fr.result, { type: "array" }));
-        if (!lus.length) { toast("Aucun produit trouvé : il faut une colonne « Produit » (utilisez le modèle Excel)."); return; }
-        const { nv, maj } = fusionnerProduits(P, lus, "x"); S.stk.catSource = `${f.name} (importé le ${frDate(jourLocal())})`;
-        toast(`${nv} produit(s) ajouté(s), ${maj} mis à jour. Pensez à enregistrer.`); render();
-      } catch (err) { toast("Lecture du fichier impossible : " + (err.message || err)); }
-    };
-    fr.readAsArrayBuffer(f); e.target.value = "";
-  };
-  const dep = $("#stDepart"); if (dep) dep.onclick = () => {
+  const lireFichier = (input, lecteur, libSource) => { input.onchange = (e) => { const f = e.target.files[0]; if (!f) return; const fr = new FileReader();
+    fr.onload = async () => { try { const lus = lecteur(XLSX.read(fr.result, { type: "array" })); if (!lus.length) { toast("Aucun produit trouvé : il faut une colonne « Produit » (utilisez le modèle Excel)."); return; }
+      const r = libSource.fusion(lus); S.stk.catSource = libSource.src(f.name); if (await sauverCatalogue(P, `${r.nv} produit(s) ajouté(s), ${r.maj} mis à jour.`)) refaire(); } catch (err) { toast("Lecture du fichier impossible : " + (err.message || err)); } };
+    fr.readAsArrayBuffer(f); e.target.value = ""; }; };
+  $("#stListeB").onclick = () => { fermerMenu(); $("#stListe").click(); };
+  lireFichier($("#stListe"), lireListeProduits, { fusion: (lus) => fusionnerProduits(P, lus, "x"), src: (n) => `${n} (importé le ${frDate(jourLocal())})` });
+  if ($("#stMercB")) { $("#stMercB").onclick = () => { fermerMenu(); $("#stMerc").click(); };
+    lireFichier($("#stMerc"), (wb) => lireMercuriale(wb, true), { fusion: (lus) => { let nv = 0, maj = 0; lus.forEach((x) => { const p = P.find((y) => y.id === x.id); if (p) { p.prixCond = x.prixCond; p.cond = x.cond || p.cond; maj++; } else { P.push(x); nv++; } }); return { nv, maj }; }, src: (n) => `${n} (importé le ${frDate(jourLocal())}, prix € convertis à ${String(EUR_XPF).replace(".", ",")} XPF/€)` }); }
+  const dep = $("#stDepart"); if (dep) dep.onclick = async () => { fermerMenu();
     const lus = depart.flatMap(([cat, L]) => L.map((x) => { const [lib, unite] = x.split("|"); return { lib, cat, unite }; }));
-    const { nv } = fusionnerProduits(P, lus, "d"); toast(nv ? `${nv} produit(s) ajouté(s) sans prix : complétez les prix et conditionnements, puis enregistrez.` : "Tous ces produits sont déjà dans la liste."); render();
-  };
-  const cs = $("#stCopieSoc"); if (cs) cs.onchange = async () => {
-    const id = cs.value; if (!id) return;
+    const { nv } = fusionnerProduits(P, lus, "d"); if (!nv) { toast("Tous ces produits sont déjà dans la liste."); return; }
+    if (await sauverCatalogue(P, `${nv} produit(s) ajouté(s) sans prix : cliquez sur chacun pour compléter.`)) refaire(); };
+  const cs = $("#stCopieSoc"); if (cs) cs.onchange = async () => { const id = cs.value; if (!id) return; fermerMenu();
     try { const d = await S.db.doc(`stock/${id}_cat`).get(); const L = d.exists ? d.data().produits || [] : [];
       if (!L.length) { toast("Ce restaurant n'a pas encore de liste de produits."); cs.value = ""; return; }
-      const { nv, maj } = fusionnerProduits(P, L.map(({ id: _i, ...x }) => x), "c"); toast(`${nv} produit(s) copié(s), ${maj} déjà présent(s). Pensez à enregistrer.`); render();
-    } catch (err) { toast("Copie impossible : " + (err.message || err)); cs.value = ""; }
-  };
-  const mb = $("#stMercB"); if (mb) mb.onclick = () => $("#stMerc").click();
-  if ($("#stMerc")) $("#stMerc").onchange = (e) => {
-    const f = e.target.files[0]; if (!f) return; const fr = new FileReader();
-    fr.onload = () => {
-      try {
-        const lus = lireMercuriale(XLSX.read(fr.result, { type: "array" }), $("#stEur").checked);
-        if (!lus.length) { toast("Aucun produit trouvé : la feuille doit contenir une colonne « Libellé produit »."); return; }
-        let nv = 0, maj = 0;
-        lus.forEach((x) => { const p = P.find((y) => y.id === x.id); if (p) { p.prixCond = x.prixCond; p.cond = x.cond || p.cond; maj++; } else { P.push(x); nv++; } });
-        S.stk.catSource = `${f.name} (importé le ${frDate(jourLocal())}${$("#stEur").checked ? `, prix € convertis à ${String(EUR_XPF).replace(".", ",")} XPF/€` : ""})`;
-        toast(`${nv} produit(s) ajouté(s), ${maj} prix mis à jour. Pensez à enregistrer.`); render();
-      } catch (err) { toast("Lecture du fichier impossible : " + (err.message || err)); }
-    };
-    fr.readAsArrayBuffer(f);
-  };
-  $("#stCatSave").onclick = async () => {
-    const doc = { ...S.stk.cat, societe: S.soc, produits: P, majLe: new Date().toISOString() }; delete doc.id;
-    if (S.stk.catSource) doc.source = S.stk.catSource;
-    try { await S.db.doc(`stock/${S.soc}_cat`).set(doc); S.stk.cat = doc; S.stk.catEdit = null; S.stk.catSource = null; toast("Liste des produits enregistrée."); render(); }
-    catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
-  };
+      const { nv, maj } = fusionnerProduits(P, L.map(({ id: _i, ...x }) => x), "c"); if (await sauverCatalogue(P, `${nv} produit(s) copié(s), ${maj} déjà présent(s).`)) refaire();
+    } catch (err) { toast("Copie impossible : " + (err.message || err)); cs.value = ""; } };
 }
 
 /* ---------- Planning : saisi par les responsables, il alimente directement les bulletins ---------- */
