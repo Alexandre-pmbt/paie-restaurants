@@ -1560,15 +1560,17 @@ function renderCaisse(v) {
       <label>au<input id="fac_fin" type="date" value="${finMoisDe(S.mois)}"></label>
       <label>N° de facture<input id="fac_num" placeholder="facultatif"></label>
       <label>Échéance de paiement<input id="fac_ech" type="date"></label>
-      <label class="check" style="align-self:end"><input type="checkbox" id="fac_reglee"> Déjà réglée</label>
+      <label>Paiement<select id="fac_pay"><option value="">À payer</option>${MODES_PAIEMENT.map((m) => `<option value="${m}">Payée · ${m.toLowerCase()}</option>`).join("")}</select></label>
+      <label id="fac_payd_l" hidden>Payée le<input id="fac_payd" type="date"></label>
       <label>Note<input id="fac_note" placeholder="facultatif"></label>
     </div>
     <p class="small muted" style="margin:0">Achats de marchandises et emballages : comptés au mois de la facture. Autres charges (loyer, électricité…) : réparties jour par jour sur la période couverte.</p>
     <div class="row"><button class="primary" id="fac_ok">${S.facEdit ? "Enregistrer les modifications" : "Enregistrer et archiver la facture"}</button>${S.facEdit ? `<button id="fac_stop">Abandonner la modification</button>` : ""}</div>
-    <h3>Factures prises en compte en ${esc(moisLib(S.mois).toLowerCase())} (${ch.length})</h3>
-    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Fournisseur</th><th>Catégorie</th><th class="num">HT</th><th></th></tr></thead><tbody>
+    <div class="row" style="flex-wrap:wrap;align-items:center"><h3 class="grow" style="margin:0">Factures prises en compte en ${esc(moisLib(S.mois).toLowerCase())} (${ch.length})</h3>${(() => { const ap = ch.filter((c) => !c.annulee && etatPaiement(c).etat !== "payee"); return ap.length ? `<span class="chip warn">${ap.length} à payer · ${F(ap.reduce((a, c) => a + etatPaiement(c).reste, 0))} F</span>` : ch.length ? '<span class="chip ok">Toutes payées</span>' : ""; })()}${S.admin ? '<button id="facRappro">Rapprocher un relevé bancaire</button>' : ""}</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Fournisseur</th><th>Catégorie</th><th class="num">HT</th><th>Paiement</th><th></th></tr></thead><tbody>
     ${ch.map((c) => `<tr><td>${esc(frDate(c.date))}</td><td>${esc(c.fournisseur || "")}${c.note ? `<div class="small muted">${esc(c.note)}</div>` : ""}</td><td class="small">${esc(catLib(c.categorie))}${!catVariable(c.categorie) && c.periodeDebut ? `<div class="muted">${esc(frDate(c.periodeDebut))} → ${esc(frDate(c.periodeFin))}</div>` : ""}</td><td class="num">${F(num(c.ht))}${(c.historique || []).length ? `<div class="small muted" title="Modifiée ${c.historique.length} fois">modifiée</div>` : ""}</td>
-      <td class="row" style="gap:6px;flex-wrap:nowrap">${c.fichier ? `<button class="link" data-facv="${esc(c.fichier)}">Voir</button>` : ""}<button class="link" data-face="${esc(c.id)}">Modifier</button>${S.admin ? `<button class="link" data-facx="${esc(c.id)}" title="Retire la facture des calculs ; le fichier reste aux archives">Annuler</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Aucune facture pour ce mois.</td></tr>`}
+      <td>${htmlPaiement(c, true)}</td>
+      <td class="row" style="gap:6px;flex-wrap:nowrap">${c.fichier ? `<button class="link" data-facv="${esc(c.fichier)}">Voir</button>` : ""}<button class="link" data-face="${esc(c.id)}">Modifier</button>${S.admin ? `<button class="link" data-facx="${esc(c.id)}" title="Retire la facture des calculs ; le fichier reste aux archives">Annuler</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Aucune facture pour ce mois.</td></tr>`}
     </tbody></table></div>
   </div></div>`;
   lierCaisse(v, k, cx, tgc);
@@ -1590,6 +1592,9 @@ function lierCaisse(v, k, cx, tgc) {
   ht.oninput = () => (ht.dataset.touche = "1");
   $("#fac_cat").onchange = (e) => { const variable = catVariable(e.target.value); $("#fac_deb").disabled = $("#fac_fin").disabled = variable; };
   $("#fac_cat").onchange({ target: $("#fac_cat") });
+  const fp = $("#fac_pay"); if (fp) fp.onchange = () => { const l = $("#fac_payd_l"); l.hidden = !fp.value; if (fp.value && !$("#fac_payd").value) $("#fac_payd").value = $("#fac_date").value || today(); };
+  v.querySelectorAll("[data-pay]").forEach((b) => (b.onclick = () => ouvrirPaiement((S.gest.charges[S.soc] || []).find((x) => x.id === b.dataset.pay))));
+  const rp = $("#facRappro"); if (rp) rp.onclick = () => ouvrirRapprochement(S.soc);
   ["fac_four", "fac_date", "fac_ttc", "fac_num"].forEach((id) => $("#" + id).addEventListener("input", (e) => (e.target.dataset.touche = "1")));
   $("#fac_cat").addEventListener("change", (e) => (e.target.dataset.touche = "1"));
   $("#fac_fic").onchange = async (e) => {
@@ -1617,7 +1622,7 @@ function lierCaisse(v, k, cx, tgc) {
   if (enEdition) {
     const c0 = enEdition, pose = (id, val) => { const i = $("#" + id); if (i) { i.value = val ?? ""; i.dataset.touche = "1"; } };
     pose("fac_four", c0.fournisseur); $("#fac_cat").value = c0.categorie || "autre"; $("#fac_cat").dataset.touche = "1"; $("#fac_cat").onchange({ target: $("#fac_cat") });
-    pose("fac_date", c0.date); pose("fac_ht", fmtMt(c0.ht)); pose("fac_ttc", c0.ttc ? fmtMt(c0.ttc) : ""); pose("fac_num", c0.numero); pose("fac_note", c0.note); pose("fac_ech", c0.echeance); const rg = $("#fac_reglee"); if (rg) { rg.checked = !!c0.payee; rg.disabled = true; rg.title = "Paiements gérés dans l'onglet Dettes fournisseurs"; }
+    pose("fac_date", c0.date); pose("fac_ht", fmtMt(c0.ht)); pose("fac_ttc", c0.ttc ? fmtMt(c0.ttc) : ""); pose("fac_num", c0.numero); pose("fac_note", c0.note); pose("fac_ech", c0.echeance); const rg = $("#fac_pay"); if (rg) { const ep = etatPaiement(c0); rg.innerHTML = `<option>${esc(ep.txt)}</option>`; rg.disabled = true; rg.title = "Pour enregistrer ou corriger un paiement, utilisez le bouton « Payer » / « Paiements » dans la liste des factures"; }
     if (c0.periodeDebut) pose("fac_deb", c0.periodeDebut); if (c0.periodeFin) pose("fac_fin", c0.periodeFin);
     $("#fac_stop").onclick = () => { S.facEdit = null; render(); };
     setTimeout(() => { const f0 = $("#facForm"); if (f0) f0.scrollIntoView({ behavior: "smooth", block: "center" }); }, 50);
@@ -1627,7 +1632,7 @@ function lierCaisse(v, k, cx, tgc) {
     if (enEdition) return enregistrerModifFacture(enEdition, b, f);
     const c = { societe: S.soc, fournisseur: $("#fac_four").value.trim(), categorie: $("#fac_cat").value, date: $("#fac_date").value,
       ht: num(ht.value), ttc: num(ttc.value) || null, numero: $("#fac_num").value.trim(), note: $("#fac_note").value.trim(), par: S.profil.nom || "", le: new Date().toISOString(), echeance: $("#fac_ech").value || null };
-    if ($("#fac_reglee").checked) { c.payee = true; c.paiements = [{ le: c.date || today(), montant: num(ttc.value) || num(ht.value), mode: "", ref: "déclarée réglée au dépôt", par: S.profil.nom || "", saisiLe: new Date().toISOString() }]; }
+    if ($("#fac_pay").value) { c.payee = true; c.paiements = [{ le: $("#fac_payd").value || c.date || today(), montant: num(ttc.value) || num(ht.value), mode: $("#fac_pay").value, ref: "indiquée payée au dépôt", par: S.profil.nom || "", saisiLe: new Date().toISOString() }]; }
     if (!catVariable(c.categorie)) { c.periodeDebut = $("#fac_deb").value || `${S.mois}-01`; c.periodeFin = $("#fac_fin").value || finMoisDe(S.mois); if (c.periodeFin < c.periodeDebut) { toast("La fin de période précède le début."); return; } }
     if (!c.date || !c.ht) { toast("Indiquez au moins la date et le montant HT."); return; }
     const doublon = (S.gest.charges[S.soc] || []).find((x) => !x.annulee && x.fournisseur && x.fournisseur === c.fournisseur && ((c.numero && x.numero === c.numero) || (x.date === c.date && num(x.ht) === c.ht)));
@@ -1720,9 +1725,9 @@ function renderArchivesCompta(v) {
       <input id="arTxt" placeholder="Fournisseur, n°…" value="${esc(F0.txt)}" style="width:12em">
       <label class="check small"><input type="checkbox" id="arAnn" ${F0.annulees ? "checked" : ""}> Afficher les annulées</label>
     </div>
-    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Restaurant</th><th>Fournisseur</th><th>N°</th><th>Catégorie</th><th class="num">HT</th><th class="num">TTC</th><th>Déposée par</th><th></th></tr></thead><tbody>
-    ${liste.map((c) => `<tr${c.annulee ? ' class="muted"' : ""}><td>${esc(frDate(c.date))}</td><td class="small">${esc(nomSoc(c.societe))}</td><td>${esc(c.fournisseur || "")}${c.annulee ? ' <span class="chip">annulée</span>' : ""}</td><td class="small">${esc(c.numero || "")}</td><td class="small">${esc(catLib(c.categorie))}</td><td class="num">${F(num(c.ht))}</td><td class="num">${c.ttc ? F(num(c.ttc)) : ""}</td><td class="small">${esc(c.par || "")}<div class="muted">${esc(frDate((c.le || "").slice(0, 10)))}</div></td><td class="row" style="gap:6px;flex-wrap:nowrap">${c.fichier ? `<button class="link" data-arv="${esc(c.fichier)}">Ouvrir</button>` : '<span class="small muted">sans fichier</span>'}${c.annulee ? "" : `<button class="link" data-are="${esc(c.id)}">Modifier</button>`}</td></tr>`).join("") || `<tr><td colspan="9" class="muted">Aucune facture pour ces critères.</td></tr>`}
-    <tr><td colspan="5"><b>Total (${liste.filter((c) => !c.annulee).length} facture(s))</b></td><td class="num"><b>${F(tot.ht)}</b></td><td class="num"><b>${F(tot.ttc)}</b></td><td colspan="2"></td></tr>
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Restaurant</th><th>Fournisseur</th><th>N°</th><th>Catégorie</th><th class="num">HT</th><th class="num">TTC</th><th>Paiement</th><th>Déposée par</th><th></th></tr></thead><tbody>
+    ${liste.map((c) => `<tr${c.annulee ? ' class="muted"' : ""}><td>${esc(frDate(c.date))}</td><td class="small">${esc(nomSoc(c.societe))}</td><td>${esc(c.fournisseur || "")}${c.annulee ? ' <span class="chip">annulée</span>' : ""}</td><td class="small">${esc(c.numero || "")}</td><td class="small">${esc(catLib(c.categorie))}</td><td class="num">${F(num(c.ht))}</td><td class="num">${c.ttc ? F(num(c.ttc)) : ""}</td><td>${c.annulee ? "" : htmlPaiement(c, false)}</td><td class="small">${esc(c.par || "")}<div class="muted">${esc(frDate((c.le || "").slice(0, 10)))}</div></td><td class="row" style="gap:6px;flex-wrap:nowrap">${c.fichier ? `<button class="link" data-arv="${esc(c.fichier)}">Ouvrir</button>` : '<span class="small muted">sans fichier</span>'}${c.annulee ? "" : `<button class="link" data-are="${esc(c.id)}">Modifier</button>`}</td></tr>`).join("") || `<tr><td colspan="10" class="muted">Aucune facture pour ces critères.</td></tr>`}
+    <tr><td colspan="5"><b>Total (${liste.filter((c) => !c.annulee).length} facture(s))</b></td><td class="num"><b>${F(tot.ht)}</b></td><td class="num"><b>${F(tot.ttc)}</b></td><td colspan="3"></td></tr>
     </tbody></table></div>
     ${sansFichier ? `<p class="small muted" style="margin:0">${sansFichier} facture(s) sans fichier joint : pensez à les déposer pour votre comptable.</p>` : ""}
   </div>`;
@@ -1746,7 +1751,7 @@ function renderArchivesCompta(v) {
   }));
   const titreSel = [F0.soc ? nomSoc(F0.soc) : "Tous", F0.annee || "toutes-annees", F0.mois].filter(Boolean).join("_");
   $("#arXlsx").onclick = () => {
-    const rows = liste.map((c) => ({ Date: frDate(c.date), Restaurant: nomSoc(c.societe), Fournisseur: c.fournisseur || "", "N° facture": c.numero || "", Catégorie: catLib(c.categorie), "Montant HT": num(c.ht), "Montant TTC": c.ttc ? num(c.ttc) : "", "Période": c.periodeDebut ? `${frDate(c.periodeDebut)} - ${frDate(c.periodeFin)}` : "", Statut: c.annulee ? "Annulée" : "", "Déposée par": c.par || "", "Déposée le": frDate((c.le || "").slice(0, 10)), Fichier: c.fichier ? c.fichier.split("/").pop().replace(/^\d+-/, "") : "" }));
+    const rows = liste.map((c) => ({ Date: frDate(c.date), Restaurant: nomSoc(c.societe), Fournisseur: c.fournisseur || "", "N° facture": c.numero || "", Catégorie: catLib(c.categorie), "Montant HT": num(c.ht), "Montant TTC": c.ttc ? num(c.ttc) : "", "Période": c.periodeDebut ? `${frDate(c.periodeDebut)} - ${frDate(c.periodeFin)}` : "", Statut: c.annulee ? "Annulée" : "", Paiement: c.annulee ? "" : etatPaiement(c).libelle, "Payée le": (c.paiements || []).map((x) => frDate(x.le)).join(", "), "Mode de paiement": [...new Set((c.paiements || []).map((x) => x.mode).filter(Boolean))].join(", "), "Reste dû": c.annulee ? "" : etatPaiement(c).reste, "Déposée par": c.par || "", "Déposée le": frDate((c.le || "").slice(0, 10)), Fichier: c.fichier ? c.fichier.split("/").pop().replace(/^\d+-/, "") : "" }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Factures");
     enregistrerFichier(nomFichier(`Factures_${titreSel}.xlsx`), XLSX.write(wb, { type: "array", bookType: "xlsx" }));
   };
@@ -2428,7 +2433,21 @@ function imprimerPlanning(soc, L, jours, lignes) {
 
 /* ---------- Dettes fournisseurs : factures à payer, échéances, paiements ---------- */
 const FOURN_SUIVIS = ["SERDIS", "NOUMEA SURGELES", "RABOT", "SULLIVAN", "BARGIBANT", "LE FROID", "GBNC", "NEWREST"];
-const MODES_PAIEMENT = ["Virement", "Chèque", "Prélèvement", "Espèces", "Carte", "Compensation"];
+const MODES_PAIEMENT = ["Virement", "Espèces", "Chèque", "Carte", "Prélèvement", "Compensation"];
+/* État de paiement d'une facture : payée (et comment), partiellement payée, à payer */
+function etatPaiement(c) {
+  const tot = montantFacture(c), paye = payeAu(c), reste = Math.max(0, Math.round(tot - paye)), ps = c.paiements || [];
+  const modes = [...new Set(ps.map((p) => p.mode).filter(Boolean))].join(" + ").toLowerCase(), der = ps.map((p) => p.le).filter(Boolean).sort().pop();
+  if ((c.payee || reste <= 1) && ps.length) return { etat: "payee", reste: 0, txt: `Payée${modes ? " · " + modes : ""}${der ? " le " + frDate(der) : ""}`, libelle: `Payée${modes ? " (" + modes + ")" : ""}`, releve: ps.some((p) => p.source === "releve") };
+  if (paye > 0) return { etat: "partielle", reste, txt: `Partielle · reste ${F(reste)} F`, libelle: "Partiellement payée" };
+  return { etat: "apayer", reste: Math.round(tot), txt: "À payer", libelle: "À payer" };
+}
+function htmlPaiement(c, bouton) {
+  const e = etatPaiement(c), ech = c.date ? echeanceDe(c) : null, retard = ech ? Math.round((new Date(today()) - new Date(ech)) / 86400000) : 0;
+  const chip = e.etat === "payee" ? `<span class="chip ok" title="${esc((c.paiements || []).map((p) => `${F(num(p.montant))} F le ${frDate(p.le)} · ${p.mode || "mode non précisé"}${p.source === "releve" ? " (vu sur le relevé)" : ""}`).join("\n"))}">${esc(e.txt)}${e.releve ? " ✓ relevé" : ""}</span>`
+    : e.etat === "partielle" ? `<span class="chip warn">${esc(e.txt)}</span>` : `<span class="chip ${retard > 0 ? "bad" : "warn"}">À payer${ech ? ` · éch. ${frDate(ech)}` : ""}</span>`;
+  return `<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">${chip}${bouton && !c.annulee ? `<button class="link" data-pay="${esc(c.id)}">${e.etat === "payee" ? "Paiements" : "Payer"}</button>` : ""}</div>`;
+}
 const suivisDe = (soc) => { const x = (S.socs.find((y) => y.id === soc) || {}).fournisseursSuivis; return Array.isArray(x) ? x : FOURN_SUIVIS; };
 const tousSuivis = () => [...new Set(S.socs.flatMap((x) => suivisDe(x.id)))];
 const normFourn = (nom) => String(nom || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9 ]+/g, " ")
@@ -2507,7 +2526,7 @@ function renderDettes(v) {
   const noms = [...new Set([...suivisVue, ...D.liste.map((c) => c.fournisseur).filter(Boolean)])].sort();
   v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Dettes fournisseurs · ${S.dt.tous ? "toutes les sociétés" : esc(socNom(S.soc))}</h2>
       <label class="small">Situation au <input type="date" id="dtJour" value="${jour}"></label>
-      ${S.admin ? `<label class="check small"><input type="checkbox" id="dtTous" ${S.dt.tous ? "checked" : ""}> Toutes les sociétés</label>` : ""}</div>
+      ${S.admin ? `<label class="check small"><input type="checkbox" id="dtTous" ${S.dt.tous ? "checked" : ""}> Toutes les sociétés</label><button id="dtRappro">Rapprocher un relevé bancaire</button>` : ""}</div>
     <div class="kpis">
       <div class="kpi"><b>${F(tot)}</b><span>Total dû aux fournisseurs (F TTC)</span></div>
       <div class="kpi"><b class="${echu ? "neg" : "pos"}">${F(echu)}</b><span>Dont échu (en retard)</span></div>
@@ -2561,6 +2580,7 @@ function renderDettes(v) {
     </div>
     <div class="row"><button class="primary" id="dt_ok">Ajouter la facture</button><span class="small muted">Elle compte aussi dans la rentabilité du restaurant. Pour joindre le PDF, déposez plutôt la facture dans « Caisse &amp; factures ».</span></div></div>` : ""}`;
   $("#dtJour").onchange = (e) => { S.dt.jour = e.target.value || null; render(); };
+  const rb = $("#dtRappro"); if (rb) rb.onclick = () => ouvrirRapprochement(S.soc);
   const t = $("#dtTous"); if (t) t.onchange = (e) => { S.dt.tous = e.target.checked; render(); };
   v.querySelectorAll("[data-dtf]").forEach((b) => (b.onclick = () => { S.dt.ouvert = S.dt.ouvert === b.dataset.dtf ? null : b.dataset.dtf; render(); }));
   v.querySelectorAll("[data-dtv]").forEach((b) => (b.onclick = async () => { const { data, error } = await S.sb.storage.from("factures").createSignedUrl(b.dataset.dtv, 300); if (error) toast("Fichier introuvable : " + error.message); else window.open(data.signedUrl, "_blank"); }));
@@ -2621,10 +2641,16 @@ function ouvrirPaiement(c) {
       <label>Date du paiement<input id="pm_date" type="date" value="${today()}"></label>
       <label>Mode<select id="pm_mode">${MODES_PAIEMENT.map((m) => `<option>${m}</option>`).join("")}</select></label>
       <label>Référence<input id="pm_ref" placeholder="n° de chèque, virement…"></label></div>
-    ${(c.paiements || []).length ? `<p class="small" style="margin:0">Déjà enregistré : ${c.paiements.map((p) => `${F(num(p.montant))} F le ${frDate(p.le)} (${esc(p.mode || "")})`).join(" · ")}</p>` : ""}
+    ${(c.paiements || []).length ? `<div class="small"><b>Déjà enregistré</b>${c.paiements.map((p, i) => `<div class="row" style="gap:8px;align-items:center">${F(num(p.montant))} F le ${frDate(p.le)} · ${esc(p.mode || "mode non précisé")}${p.source === "releve" ? ' <span class="chip info">vu sur le relevé</span>' : ""}${p.par ? ` <span class="muted">par ${esc(p.par)}</span>` : ""}${S.admin ? ` <button class="link" data-pmx="${i}">Supprimer</button>` : ""}</div>`).join("")}</div>` : ""}
     <div class="row"><button class="primary" id="pm_ok">Enregistrer le paiement</button><button id="pm_ko">Annuler</button></div></div>`;
   document.body.appendChild(dlg);
   const fermer = () => dlg.remove(); dlg.querySelector("#pm_ko").onclick = fermer; dlg.onclick = (e) => { if (e.target === dlg) fermer(); };
+  if (reste <= 1) { dlg.querySelector("#pm_mt").value = ""; }
+  dlg.querySelectorAll("[data-pmx]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Supprimer ce paiement ? La facture redeviendra à payer pour ce montant.")) return;
+    const paiements = (c.paiements || []).filter((_, i) => i !== Number(b.dataset.pmx)), payee = paiements.length > 0 && paiements.reduce((a, p) => a + num(p.montant), 0) >= montantFacture(c) - 1;
+    try { await S.db.doc("charges/" + c.id).update({ paiements, payee }); c.paiements = paiements; c.payee = payee; fermer(); toast("Paiement supprimé."); render(); } catch (e) { toast("Suppression impossible : " + (e.message || e)); }
+  }));
   dlg.querySelector("#pm_ok").onclick = async () => {
     const mt = num(dlg.querySelector("#pm_mt").value), le = dlg.querySelector("#pm_date").value;
     if (!mt || !le) { toast("Indiquez le montant et la date."); return; }
@@ -2633,6 +2659,182 @@ function ouvrirPaiement(c) {
     const payee = paiements.reduce((a, p) => a + num(p.montant), 0) >= montantFacture(c) - 1;
     try { await S.db.doc("charges/" + c.id).update({ paiements, payee }); c.paiements = paiements; c.payee = payee; fermer(); toast(payee ? "Facture soldée." : "Paiement partiel enregistré."); render(); }
     catch (e) { toast("Enregistrement impossible : " + (e.message || e)); }
+  };
+}
+
+/* ---------- Rapprochement bancaire : lecture d'un relevé (Excel/CSV, OFX, PDF) et pointage des factures payées ---------- */
+function montantReleve(v) {
+  if (typeof v === "number") return v;
+  let s = String(v == null ? "" : v).replace(/[\s  ]/g, "").replace(/(XPF|CFP|F|€)$/i, "");
+  if (!s || !/\d/.test(s)) return null;
+  let neg = /^-|-$|^\(.*\)$/.test(s); s = s.replace(/[()+-]/g, "");
+  if (s.includes(",") && s.includes(".")) s = s.lastIndexOf(",") > s.lastIndexOf(".") ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+  else if (s.includes(",")) s = /,\d{1,2}$/.test(s) ? s.replace(/,(?=\d{3}(\D|$))/g, "").replace(",", ".") : s.replace(/,/g, "");
+  else if (s.includes(".") && !/\.\d{1,2}$/.test(s)) s = s.replace(/\./g, "");
+  const n = Number(s); return isFinite(n) ? (neg ? -n : n) : null;
+}
+function dateReleve(v, an) {
+  if (v instanceof Date && !isNaN(v)) return new Date(v.getTime() - v.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  if (typeof v === "number" && v > 30000 && v < 70000) return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
+  const t = String(v == null ? "" : v).trim(); let m;
+  if ((m = t.match(/^(\d{4})-(\d{2})-(\d{2})/))) return `${m[1]}-${m[2]}-${m[3]}`;
+  if ((m = t.match(/^(\d{4})(\d{2})(\d{2})/))) return `${m[1]}-${m[2]}-${m[3]}`;
+  if ((m = t.match(/^(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-](\d{2,4}))?(?!\d)/))) {
+    const y = m[3] ? (m[3].length === 2 ? "20" + m[3] : m[3]) : an; if (!y || +m[2] < 1 || +m[2] > 12 || +m[1] < 1 || +m[1] > 31) return null;
+    return `${y}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  }
+  return null;
+}
+const anneeDe = (txt) => { const m = String(txt).match(/\b(20\d{2})\b/g); if (!m) return String(new Date().getFullYear()); const c = {}; m.forEach((y) => (c[y] = (c[y] || 0) + 1)); return Object.entries(c).sort((a, b) => b[1] - a[1])[0][0]; };
+function lireOFX(txt) {
+  const ops = [];
+  (txt.match(/<STMTTRN>[\s\S]*?(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi) || []).forEach((b) => {
+    const g = (k) => { const m = b.match(new RegExp("<" + k + ">([^<\\r\\n]*)", "i")); return m ? m[1].trim() : ""; };
+    const d = dateReleve(g("DTPOSTED")), mt = montantReleve(g("TRNAMT"));
+    if (d && mt != null) ops.push({ date: d, lib: [g("NAME"), g("MEMO")].filter(Boolean).join(" "), montant: mt });
+  });
+  return ops;
+}
+function lireTableauReleve(rows) {
+  const ops = [], txtAll = rows.slice(0, 40).map((r) => r.join(" ")).join(" "), an = anneeDe(txtAll);
+  const norm = (x) => String(x == null ? "" : x).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+  let h = -1, col = {};
+  for (let i = 0; i < Math.min(rows.length, 40); i++) {
+    const r = rows[i].map(norm); const di = r.findIndex((x) => /^date/.test(x) || x === "date"); const mi = r.findIndex((x) => /debit|montant/.test(x));
+    if (di >= 0 && mi >= 0) { h = i; col.date = di; col.lib = r.findIndex((x) => !/^date/.test(x) && /libell|designation|operation|motif|description|nature|detail|intitule/.test(x));
+      col.deb = r.findIndex((x) => /debit/.test(x)); col.cre = r.findIndex((x) => /credit/.test(x)); col.mt = r.findIndex((x) => /montant/.test(x)); break; }
+  }
+  if (h >= 0) {
+    for (let i = h + 1; i < rows.length; i++) {
+      const r = rows[i], d = dateReleve(r[col.date], an);
+      const lib = col.lib >= 0 ? String(r[col.lib] ?? "").trim() : r.filter((x) => typeof x === "string" && !dateReleve(x, an)).sort((a, b) => b.length - a.length)[0] || "";
+      if (!d) { if (ops.length && lib && !/solde|total/i.test(lib)) ops[ops.length - 1].lib += " " + lib; continue; }
+      let mt = null;
+      if (col.deb >= 0 || col.cre >= 0) { const db = col.deb >= 0 ? montantReleve(r[col.deb]) : null, cr = col.cre >= 0 ? montantReleve(r[col.cre]) : null;
+        if (db) mt = -Math.abs(db); else if (cr) mt = Math.abs(cr); }
+      else if (col.mt >= 0) mt = montantReleve(r[col.mt]);
+      if (mt && !/^solde|^total/i.test(lib)) ops.push({ date: d, lib, montant: mt });
+    }
+    return ops;
+  }
+  rows.forEach((r) => { const di = r.findIndex((x) => dateReleve(x, an)); if (di < 0) return;
+    const nums = r.slice(di + 1).map((x) => (typeof x === "number" ? x : /^[\s\d.,  ()+-]+$/.test(String(x ?? "")) ? montantReleve(x) : null)).filter((x) => x);
+    const lib = r.filter((x) => typeof x === "string" && !dateReleve(x, an) && /[a-z]/i.test(x)).sort((a, b) => b.length - a.length)[0] || "";
+    if (nums.length && !/^solde|^total/i.test(lib)) ops.push({ date: dateReleve(r[di], an), lib, montant: nums[0] < 0 ? nums[0] : -Math.abs(nums[0]), signeInconnu: nums[0] > 0 }); });
+  return ops;
+}
+async function lirePDFReleve(file) {
+  const lib = await pdfjs(), doc = await lib.getDocument({ data: await file.arrayBuffer() }).promise, ops = [];
+  let xDeb = null, xCre = null, an = null, toutTxt = "";
+  for (let p = 1; p <= doc.numPages; p++) {
+    const c = await (await doc.getPage(p)).getTextContent(), lignes = [];
+    c.items.forEach((it) => { if (!it.str.trim()) return; const y = it.transform[5], x = it.transform[4];
+      let l = lignes.find((L) => Math.abs(L.y - y) < 2.5); if (!l) lignes.push((l = { y, items: [] })); l.items.push({ s: it.str.trim(), x, xf: x + (it.width || 0) }); });
+    lignes.sort((a, b) => b.y - a.y).forEach((l) => l.items.sort((a, b) => a.x - b.x));
+    toutTxt += lignes.map((l) => l.items.map((i) => i.s).join(" ")).join("\n"); if (!an) an = anneeDe(toutTxt);
+    for (const l of lignes) {
+      const d0 = l.items.find((i) => /^d[ée]bit/i.test(i.s)), c0 = l.items.find((i) => /^cr[ée]dit/i.test(i.s));
+      if (d0 && c0) { xDeb = d0.xf; xCre = c0.xf; continue; }
+      const t = l.items.map((i) => i.s).join(" "), d = dateReleve(l.items[0].s, an);
+      const montants = l.items.filter((i, k) => k > 0 && /^-?\(?\d{1,3}(?:[ .  ]\d{3})*(?:,\d{1,2})?\)?-?$|^-?\d+(?:,\d{1,2})?$/.test(i.s) && !dateReleve(i.s, an));
+      const libl = l.items.filter((i, k) => k > 0 && !montants.includes(i) && !dateReleve(i.s, an)).map((i) => i.s).join(" ");
+      if (!d) { if (ops.length && !montants.length && !l.items.some((i) => /^-?\d{1,3}(?:[ .  ]\d{3})+(?:,\d{1,2})?$/.test(i.s)) && t.length < 80 && !/solde|total|report|page/i.test(t)) ops[ops.length - 1].lib += " " + t; continue; }
+      if (!montants.length || /solde|total|report/i.test(libl)) continue;
+      const m = montants[montants.length - 1], v = Math.abs(montantReleve(m.s));
+      if (!v) continue;
+      if (/^-|-$|^\(/.test(m.s)) ops.push({ date: d, lib: libl, montant: -v });
+      else if (xDeb != null && xCre != null) ops.push({ date: d, lib: libl, montant: Math.abs(m.xf - xDeb) <= Math.abs(m.xf - xCre) ? -v : v });
+      else ops.push({ date: d, lib: libl, montant: -v, signeInconnu: true });
+    }
+  }
+  return ops;
+}
+async function lireReleve(file) {
+  const nom = file.name.toLowerCase();
+  if (/\.(ofx|qfx)$/.test(nom)) return lireOFX(await file.text());
+  if (/\.pdf$/.test(nom) || file.type === "application/pdf") return lirePDFReleve(file);
+  if (/\.(csv|txt)$/.test(nom)) { const t = await file.text(); if (/<OFX>|<STMTTRN>/i.test(t)) return lireOFX(t);
+    const sep = (t.split("\n")[0].match(/;/g) || []).length >= (t.split("\n")[0].match(/,/g) || []).length ? ";" : ",";
+    return lireTableauReleve(t.split(/\r?\n/).map((l) => l.split(sep).map((x) => x.replace(/^"|"$/g, "").trim()))); }
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+  return wb.SheetNames.flatMap((sn) => lireTableauReleve(XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: null, raw: true })));
+}
+const modeDeLibelle = (l) => /\b(CHQ|CHEQUE|CH[ÈE]QUE)\b/i.test(l) ? "Chèque" : /\b(PRLV|PRELEV|PR[ÉE]L[ÈE]VEMENT|PRL)\b/i.test(l) ? "Prélèvement" : /\b(CB|CARTE|PAIEMENT CARTE|FACT CB)\b/i.test(l) ? "Carte" : /\b(RETRAIT|ESPECES)\b/i.test(l) ? "Espèces" : "Virement";
+const cleOp = (o) => `${o.date}|${Math.round(Math.abs(o.montant))}|${normFourn(o.lib).slice(0, 40)}`;
+function proposerRapprochements(ops, factures) {
+  const dejaVus = new Set(factures.flatMap((c) => (c.paiements || []).map((p) => p.releve).filter(Boolean)));
+  const ouvertes = factures.filter((c) => !c.annulee && c.date).map((c) => ({ c, reste: Math.round(montantFacture(c) - payeAu(c)), cle: cleFourn(c.fournisseur),
+    mots: normFourn(c.fournisseur).split(" ").filter((w) => w.length >= 4) })).filter((x) => x.reste > 1);
+  const prises = new Set();
+  const nomOk = (x, L) => (x.cle && x.cle !== "SANS FOURNISSEUR" && L.includes(x.cle)) || x.mots.some((w) => L.includes(w)) || (x.cle && L.replace(/ /g, "").includes(x.cle.replace(/ /g, "")));
+  return ops.filter((o) => o.montant < 0).map((o) => {
+    const amt = Math.round(Math.abs(o.montant)), L = " " + normFourn(o.lib) + " ", cle = cleOp(o);
+    if (dejaVus.has(cle)) return { o, amt, cle, deja: true, choix: [] };
+    const dispo = ouvertes.filter((x) => !prises.has(x.c.id) && x.c.date <= plAdd(o.date, 3));
+    const memeNom = dispo.filter((x) => nomOk(x, L));
+    const choix = [];
+    memeNom.filter((x) => Math.abs(x.reste - amt) <= 1).sort((a, b) => echeanceDe(a.c).localeCompare(echeanceDe(b.c))).forEach((x) => choix.push({ fs: [x], sur: true }));
+    if (!choix.length && memeNom.length > 1) {
+      const parCle = {}; memeNom.forEach((x) => (parCle[x.cle] = parCle[x.cle] || []).push(x));
+      Object.values(parCle).forEach((g) => { const n = Math.min(g.length, 16); g = g.sort((a, b) => a.c.date.localeCompare(b.c.date)).slice(0, n);
+        for (let mask = 1; mask < 1 << n && choix.length < 3; mask++) { let s = 0; for (let i = 0; i < n; i++) if (mask & (1 << i)) s += g[i].reste;
+          if (Math.abs(s - amt) <= 1 && (mask & (mask - 1))) choix.push({ fs: g.filter((_, i) => mask & (1 << i)), sur: true }); } });
+    }
+    if (!choix.length) { const memeNomUne = memeNom.filter((x) => x.reste > amt).sort((a, b) => a.c.date.localeCompare(b.c.date))[0]; if (memeNomUne) choix.push({ fs: [memeNomUne], partiel: true, sur: false }); }
+    dispo.filter((x) => !memeNom.includes(x) && Math.abs(x.reste - amt) <= 1).slice(0, 4).forEach((x) => choix.push({ fs: [x], sur: false }));
+    if (choix[0] && choix[0].sur) choix[0].fs.forEach((x) => prises.add(x.c.id));
+    return { o, amt, cle, choix, coche: !!(choix[0] && choix[0].sur) };
+  });
+}
+async function ouvrirRapprochement(socDefaut) {
+  const socNom = (id) => (S.socs.find((x) => x.id === id) || {}).enseigne || ENSEIGNES[id] || id;
+  const dlg = document.createElement("div"); dlg.className = "modal-fond";
+  dlg.innerHTML = `<div class="panel modal" role="dialog" aria-label="Rapprochement bancaire" style="max-width:min(1100px,96vw);width:96vw"><h2>Rapprocher un relevé bancaire</h2>
+    <p class="small muted" style="margin:0">Déposez le relevé de compte de la société (export Excel/CSV de la banque, fichier OFX, ou PDF du relevé). Chaque débit est comparé aux factures non payées : même montant et nom du fournisseur dans le libellé, ou plusieurs factures du même fournisseur dont le total correspond. Rien n'est enregistré avant votre validation.</p>
+    <div class="form"><label>Société<select id="rb_soc">${S.socs.map((x) => `<option value="${esc(x.id)}" ${x.id === socDefaut ? "selected" : ""}>${esc(socNom(x.id))}</option>`).join("")}</select></label>
+      <label>Relevé de compte<input type="file" id="rb_fic" accept=".csv,.txt,.xls,.xlsx,.ofx,.qfx,.pdf,application/pdf"></label></div>
+    <div id="rb_res"></div><div class="row"><button class="primary" id="rb_ok" hidden>Enregistrer les paiements cochés</button><button id="rb_ko">Fermer</button></div></div>`;
+  document.body.appendChild(dlg);
+  const fermer = () => dlg.remove(); dlg.querySelector("#rb_ko").onclick = fermer;
+  const res = dlg.querySelector("#rb_res"), ok = dlg.querySelector("#rb_ok"); let lignes = [], factures = [];
+  dlg.querySelector("#rb_fic").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return; const soc = dlg.querySelector("#rb_soc").value;
+    res.innerHTML = `<p class="muted">Lecture du relevé…</p>`; ok.hidden = true;
+    try {
+      const [ops, q] = await Promise.all([lireReleve(f), S.db.collection("charges").where("societe", "==", soc).get()]);
+      factures = q.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (!ops.length) { res.innerHTML = `<p class="warn">Aucune opération lisible dans ce fichier. Essayez l'export Excel/CSV ou OFX de votre banque en ligne (plus fiable que le PDF).</p>`; return; }
+      lignes = proposerRapprochements(ops, factures);
+      const deb = ops.filter((o) => o.montant < 0), cre = ops.filter((o) => o.montant > 0), trouv = lignes.filter((l) => l.choix.length), dej = lignes.filter((l) => l.deja).length;
+      const periode = ops.map((o) => o.date).sort();
+      const libChoix = (ch) => ch.partiel ? `Acompte sur ${ch.fs[0].c.fournisseur} n° ${ch.fs[0].c.numero || "—"} du ${frDate(ch.fs[0].c.date)} (reste ${F(ch.fs[0].reste)} F)` : ch.fs.length > 1 ? `${ch.fs.length} factures ${ch.fs[0].c.fournisseur} : ${ch.fs.map((x) => `n° ${x.c.numero || "—"} (${F(x.reste)})`).join(", ")}` : `${ch.fs[0].c.fournisseur || "?"} · n° ${ch.fs[0].c.numero || "—"} du ${frDate(ch.fs[0].c.date)} · ${F(ch.fs[0].reste)} F${ch.sur ? "" : " (montant identique, nom non reconnu)"}`;
+      res.innerHTML = `<p class="small" style="margin:0"><b>${ops.length} opérations</b> du ${frDate(periode[0])} au ${frDate(periode[periode.length - 1])} : ${deb.length} débits, ${cre.length} crédits (ignorés). <b>${trouv.length} débit(s) correspondent à des factures</b>${dej ? `, ${dej} déjà rapproché(s) lors d'un import précédent` : ""}. ${ops.some((o) => o.signeInconnu) ? '<span class="warn">Débit/crédit non identifiés dans ce PDF : vérifiez bien chaque ligne.</span>' : ""}</p>
+        <div class="tbl-wrap" style="max-height:55vh;overflow:auto"><table><thead><tr><th></th><th>Date</th><th>Libellé du relevé</th><th class="num">Débit</th><th>Facture(s) à marquer payée(s)</th><th>Mode</th></tr></thead><tbody>
+        ${lignes.map((l, i) => `<tr${l.deja ? ' class="muted"' : ""}><td>${l.choix.length && !l.deja ? `<input type="checkbox" data-rbc="${i}" ${l.coche ? "checked" : ""} aria-label="Rapprocher">` : ""}</td><td>${frDate(l.o.date)}</td><td class="small">${esc(l.o.lib)}</td><td class="num">${F(l.amt)}</td>
+          <td class="small">${l.deja ? "déjà rapproché" : l.choix.length ? `<select data-rbs="${i}" style="max-width:420px">${l.choix.map((ch, k) => `<option value="${k}">${esc(libChoix(ch))}</option>`).join("")}</select>` : '<span class="muted">aucune facture correspondante</span>'}</td>
+          <td class="small">${l.choix.length && !l.deja ? `<select data-rbm="${i}">${MODES_PAIEMENT.map((m) => `<option ${m === modeDeLibelle(l.o.lib) ? "selected" : ""}>${m}</option>`).join("")}</select>` : ""}</td></tr>`).join("")}
+        </tbody></table></div>
+        <p class="small muted" style="margin:0">Cochées d'office : correspondance sûre (montant et nom du fournisseur). Les autres propositions sont à vérifier avant de cocher. Les débits sans facture (salaires, loyers, frais bancaires…) peuvent signaler une facture pas encore déposée.</p>`;
+      ok.hidden = !lignes.some((l) => l.choix.length && !l.deja);
+    } catch (err) { res.innerHTML = `<p class="warn">Lecture impossible : ${esc(err.message || String(err))}</p>`; }
+  };
+  ok.onclick = async () => {
+    const aFaire = [...res.querySelectorAll("[data-rbc]:checked")].map((cb) => { const i = Number(cb.dataset.rbc), l = lignes[i];
+      return { l, ch: l.choix[Number(res.querySelector(`[data-rbs="${i}"]`).value)], mode: res.querySelector(`[data-rbm="${i}"]`).value }; });
+    if (!aFaire.length) { toast("Cochez au moins une ligne."); return; }
+    const parFacture = {};
+    aFaire.forEach(({ l, ch, mode }) => { let restant = l.amt;
+      ch.fs.forEach((x, k) => { const mt = k === ch.fs.length - 1 ? restant : Math.min(x.reste, restant); restant -= mt; if (mt <= 0) return;
+        (parFacture[x.c.id] = parFacture[x.c.id] || { c: x.c, ps: [] }).ps.push({ le: l.o.date, montant: mt, mode, ref: l.o.lib.slice(0, 120), source: "releve", releve: l.cle, par: S.profil.nom || "", saisiLe: new Date().toISOString() }); }); });
+    ok.disabled = true; ok.textContent = "Enregistrement…"; let n = 0;
+    try {
+      for (const { c, ps } of Object.values(parFacture)) {
+        const paiements = [...(c.paiements || []), ...ps], payee = paiements.reduce((a, p) => a + num(p.montant), 0) >= montantFacture(c) - 1;
+        await S.db.doc("charges/" + c.id).update({ paiements, payee }); n++;
+      }
+      toast(`${n} facture(s) mise(s) à jour à partir du relevé.`); fermer();
+      S.gest = { caisse: {}, charges: {}, charge: {} }; S.dt.data = null; S.arch = null; render();
+    } catch (err) { toast(`Enregistrement interrompu après ${n} facture(s) : ${err.message || err}`); ok.disabled = false; ok.textContent = "Enregistrer les paiements cochés"; }
   };
 }
 
