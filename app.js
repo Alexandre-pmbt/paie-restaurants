@@ -31,9 +31,9 @@ const cle = () => `${S.soc}_${S.mois}`;
 function resub() {
   S.unsub.forEach((u) => u()); S.unsub = [];
   if (!S.db || !S.soc) { render(); return; }
-  S.saisie = null; S.ajust = {}; S.cloture = null; S.parsed = null; S.sel = null;
-  S.unsub.push(S.db.doc("saisies/" + cle()).onSnapshot((d) => { const nv = d.exists ? d.data() : null;
-    if (S.pl && S.pl.dirty && S.saisie) { if (nv) { nv.planning = S.saisie.planning; nv.shifts = S.saisie.shifts; } else return; }
+  S.saisie = null; S.ajust = {}; S.cloture = null; S.parsed = null; S.sel = null; S.saisieOk = false;
+  S.unsub.push(S.db.doc("saisies/" + cle()).onSnapshot((d) => { const nv = d.exists ? d.data() : null; S.saisieOk = true;
+    if (S.pl && S.pl.dirty && S.saisie) { if (nv) { nv.planning = S.saisie.planning; nv.shifts = S.saisie.shifts; nv.postes = S.saisie.postes; nv.planningAuto = S.saisie.planningAuto; } else { render(); return; } }
     S.saisie = nv; render(); }, err));
   if (S.admin) {
     S.unsub.push(S.db.collection("salaries").where("societe", "==", S.soc).onSnapshot((q) => { S.salaries = q.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.ordre ?? 99) - (b.ordre ?? 99) || a.nom.localeCompare(b.nom)); synchroEquipePlanning(); render(); }, err));
@@ -2294,6 +2294,11 @@ function renderPlanning(v) {
   const L = S.pl.sem, jours = [0, 1, 2, 3, 4, 5, 6].map((i) => plAdd(L, i)), feries = new Set(soc.feries || []);
   const clos = S.cloture || (S.saisie && S.saisie.cloture);
   const eq = plEquipe(L);
+  const R = chargerRegles(soc);
+  const auj0 = jourLocal(), dow = (new Date(auj0 + "T00:00:00Z").getUTCDay() + 6) % 7, prochaine = plAdd(auj0, 7 - dow);
+  const pVide = sems.includes(prochaine) ? !eq.some((e) => [0, 1, 2, 3, 4, 5, 6].some((i) => { const t = plCase(e.cle, plAdd(prochaine, i)); return t && !/^(CP|MAL|ABS)/.test(t); })) : null;
+  const banniere = dow >= 3 && L !== prochaine && pVide !== false && !clos ? `<div class="pl-ban row" style="align-items:center;gap:10px;flex-wrap:wrap"><span>📅 <b>Planning de la semaine du ${frDate(prochaine).slice(0, 5)} au ${frDate(plAdd(prochaine, 6)).slice(0, 5)}</b> ${pVide ? "pas encore fait" : "à préparer"} : l'outil peut le générer à partir des heures de contrat et des besoins par créneau.</span><button class="primary" id="plBan">Générer la semaine prochaine</button></div>` : "";
+  if (S.pl.autoGen === L && R && S.saisieOk && eq.length) { S.pl.autoGen = null; setTimeout(() => lancerGeneration(soc, L, [0, 1, 2, 3, 4, 5, 6].map((i) => plAdd(L, i)), eq), 0); }
   const nav = `<div class="row" style="flex-wrap:wrap;gap:6px">
       <button id="plPrev" title="Semaine précédente">◀</button>
       ${sems.map((l, i) => `<button class="${l === L ? "primary" : ""}" data-plsem="${l}">S${i + 1} · ${frDate(l).slice(0, 5)}–${frDate(plAdd(l, 6)).slice(0, 5)}</button>`).join("")}
@@ -2319,25 +2324,36 @@ function renderPlanning(v) {
   const cls = (r) => (r.err ? "pl-err" : r.cp ? "pl-cp" : r.mal ? "pl-mal" : r.ne ? "pl-ne" : r.h ? "pl-on" : "");
   v.innerHTML = `<div class="panel"><div class="row" style="flex-wrap:wrap"><h2 class="grow">Planning · ${esc(soc.enseigne || ENSEIGNES[soc.id] || soc.nom)} · paie de ${esc(moisLib(S.mois).toLowerCase())}</h2>
       <span class="small muted" id="plEtat">${clos ? "Mois clôturé : lecture seule" : S.saisie && S.saisie.planningMaj ? `Enregistré ${esc(frDate(S.saisie.planningMaj.slice(0, 10)))}${S.saisie.planningPar ? " par " + esc(S.saisie.planningPar) : ""}` : ""}</span></div>
-    ${nav}
+    ${banniere}${nav}
     <div class="row" style="flex-wrap:wrap;gap:6px">
       <button id="plCopie" ${clos ? "disabled" : ""}>Copier la semaine précédente</button>
       <button id="plVide" ${clos ? "disabled" : ""}>Vider la semaine</button>
       <button id="plPrint">Imprimer / afficher</button>
+      <button id="plAuto" class="primary" ${clos ? "disabled" : ""} title="Remplit la semaine selon les heures de contrat et les besoins par créneau">⚡ Générer automatiquement</button>
+      <button id="plRegles">Règles du planning</button>
       <span class="grow"></span>
       <span class="small muted">Saisie : <b>9-14</b> · <b>9h-14h30 18h-22h</b> (coupure) · <b>7</b> (durée) · <b>cp</b> · <b>mal</b> ou <b>mal 5</b> · <b>abs 4</b> (heures non effectuées) · vide = repos. Entrée = case du dessous.</span>
     </div>
     <div class="tbl-wrap"><table class="pl"><thead><tr><th>Salarié</th>${jours.map((d, i) => `<th class="${feries.has(d) ? "pl-fer" : ""}">${JOURS_PL[i]} ${frDate(d).slice(0, 5)}${feries.has(d) ? "<div class=\"small\">férié</div>" : ""}</th>`).join("")}<th class="num">Semaine</th></tr></thead><tbody>
     ${lignes.map((l, li) => `<tr><td><b>${esc(l.e.prenom)}</b> <span class="small muted">${esc((l.e.nom || "").slice(0, 1))}.</span><div class="small muted">contrat ${hTxt(l.e.hebdo)}</div></td>
-      ${l.cases.map((c, ci) => c.hors ? `<td class="pl-hors small muted">hors contrat</td>` : `<td class="${cls(c.r)}"><input class="pl-in" data-k="${esc(l.e.cle)}" data-d="${c.d}" data-li="${li}" data-ci="${ci}" value="${esc(c.r.err ? c.brut : c.r.txt)}" ${clos ? "disabled" : ""} aria-label="${esc(l.e.prenom)} ${JOURS_PL[ci]} ${frDate(c.d)}"><div class="small ${c.r.err ? "" : "muted"}">${c.r.err ? esc(c.r.err) : c.r.h && c.r.plages ? hTxt(c.r.h) : "&nbsp;"}</div></td>`).join("")}
+      ${l.cases.map((c, ci) => c.hors ? `<td class="pl-hors small muted">hors contrat</td>` : `<td class="${cls(c.r)}"><input class="pl-in" data-k="${esc(l.e.cle)}" data-d="${c.d}" data-li="${li}" data-ci="${ci}" value="${esc(c.r.err ? c.brut : c.r.txt)}" ${clos ? "disabled" : ""} aria-label="${esc(l.e.prenom)} ${JOURS_PL[ci]} ${frDate(c.d)}"><div class="small ${c.r.err ? "" : "muted"}">${c.r.err ? esc(c.r.err) : c.r.h && c.r.plages ? hTxt(c.r.h) : "&nbsp;"}${(() => { const po = c.r.h && ((S.saisie && S.saisie.postes && S.saisie.postes[l.e.cle]) || {})[c.d]; return po ? ` · <button class="link pl-po pl-po-${po}" data-po="${esc(l.e.cle)}|${c.d}" title="Changer de poste" ${clos ? "disabled" : ""}>${esc(POSTES_PL[po] || po)}</button>` : ""; })()}</div></td>`).join("")}
       <td class="num"><b>${hTxt(l.w) || "0h"}</b>${l.hc ? `<div class="small" style="color:var(--warn)">+${hTxt(l.hc)} compl.</div>` : ""}${l.hs ? `<div class="small" style="color:var(--bad)">+${hTxt(l.hs)} sup.</div>` : ""}${!l.hc && !l.hs && l.w + l.absH < l.e.hebdo - 0.01 ? `<div class="small muted">−${hTxt(l.e.hebdo - l.w - l.absH)} / contrat</div>` : ""}${l.alertes.map((a) => `<div class="small" style="color:var(--bad)">⚠ ${esc(a)}</div>`).join("")}</td></tr>`).join("")}
     <tr class="total"><td>Heures planifiées</td>${totJour.map((t) => `<td class="num">${hTxt(t) || "—"}</td>`).join("")}<td class="num">${hTxt(totJour.reduce((a, b) => a + b, 0))}</td></tr>
     </tbody></table></div>
+    ${(() => { if (!R) return ""; const cv = couvertureSemaine(R, eq, jours); if (!cv) return ""; const d = S.pl.dernier && S.pl.dernier.L === L ? S.pl.dernier : null; const mq = lignesManques(cv.G, L, cv.manques);
+      return `<div class="pl-couv ${mq.length ? "warn" : "ok"}"><b>${mq.length ? `⚠ Besoins non couverts (${mq.length})` : "✓ Tous les besoins en cuisine et en caisse sont couverts"}</b>${mq.length ? `<ul>${mq.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}${d && d.ecarts.length ? `<div class="small" style="margin-top:4px">Heures de contrat non atteintes ou dépassées : ${d.ecarts.map(esc).join(" · ")}</div>` : ""}<div class="small muted">Comparaison avec les règles du planning (${R.defaut ? "règles par défaut, à vérifier" : "règles enregistrées"}). Les postes « cuisine / caisse » sous les cases se changent d'un clic.</div></div>`; })()}
     <p class="small muted" style="margin:0">Le planning est enregistré automatiquement et sert directement au calcul des fiches de paie du mois (heures complémentaires, supplémentaires, congés, absences). Les semaines vont du lundi au dimanche ; une semaine est payée sur le mois de son dimanche.</p>
   </div>`;
   lierPlanningNav(v, sems);
   if (act) { const f = v.querySelector(`.pl-in[data-li="${act.li}"][data-ci="${act.ci}"]`); if (f) { if (act.modif) f.value = act.val; f.focus(); if (!act.modif) f.select(); } }
+  $("#plRegles").onclick = () => ouvrirRegles(soc, eq);
+  const bn = $("#plBan"); if (bn) bn.onclick = () => { S.pl.autoGen = prochaine; S.pl.vue = "semaine";
+    if (sems.includes(prochaine)) { S.pl.sem = prochaine; render(); return; }
+    const m = plAdd(prochaine, 6).slice(0, 7); S.pl.sem = prochaine; S.mois = m; $("#selMois").value = m; store.set("paie.mois", m); resub(); };
   if (clos) { $("#plPrint").onclick = () => imprimerPlanning(soc, L, jours, lignes); return; }
+  $("#plAuto").onclick = () => lancerGeneration(soc, L, jours, eq);
+  v.querySelectorAll("[data-po]").forEach((b) => (b.onclick = () => { const [k, d] = b.dataset.po.split("|");
+    const opts = Object.keys(POSTES_PL), cur = S.saisie.postes[k][d], nx = opts[(opts.indexOf(cur) + 1) % opts.length]; S.saisie.postes[k][d] = nx; planifierSauvegarde(); render(); }));
   const ins = [...v.querySelectorAll(".pl-in")];
   const aller = (li, ci) => { const f = v.querySelector(`.pl-in[data-li="${li}"][data-ci="${ci}"]`); if (f) f.focus(); };
   ins.forEach((i) => {
@@ -2395,7 +2411,7 @@ function planifierSauvegarde() {
 }
 async function sauverPlanning() {
   if (!S.saisie || !S.pl.dirty) return; S.pl.dirty = false;
-  const k = cle(), maj = { planning: S.saisie.planning, shifts: S.saisie.shifts, planningMaj: new Date().toISOString(), planningPar: (S.profil && S.profil.nom) || "", source: "planning" };
+  const k = cle(), maj = { planning: S.saisie.planning, shifts: S.saisie.shifts, postes: S.saisie.postes || {}, planningAuto: S.saisie.planningAuto || null, planningMaj: new Date().toISOString(), planningPar: (S.profil && S.profil.nom) || "", source: "planning" };
   try {
     if (S.saisie.nouveau) { const doc = { societe: S.soc, mois: S.mois, cloture: false, alertes: [], ...maj }; await S.db.doc("saisies/" + k).set(doc); delete S.saisie.nouveau; }
     else await S.db.doc("saisies/" + k).update(maj);
@@ -2429,6 +2445,230 @@ function imprimerPlanning(soc, L, jours, lignes) {
     ${lignes.map((l) => `<tr><td class="n"><b>${esc(l.e.prenom)} ${esc(l.e.nom)}</b></td>${l.cases.map((c) => `<td class="${c.r.cp ? "cp" : c.r.mal ? "mal" : c.r.ne ? "ne" : ""}">${c.hors ? "" : esc(c.r.txt || "repos")}</td>`).join("")}<td><b>${hTxt(l.w) || "0h"}</b></td></tr>`).join("")}
     </tbody></table><script>window.onload=()=>window.print()<\/script></body></html>`);
   w.document.close();
+}
+
+/* ---------- Planning automatique : règles du restaurant (besoins par créneau et par poste) + génération de la semaine ---------- */
+const POSTES_PL = { cuisine: "Cuisine", caisse: "Caisse" };
+const fH = (x) => { x = ((x % 24) + 24) % 24; const mn = Math.round(x * 60); return `${Math.floor(mn / 60)}h${mn % 60 ? String(mn % 60).padStart(2, "0") : ""}`; };
+const lireH = (t) => { const m = String(t || "").trim().replace(",", ".").match(/^(\d{1,2})(?:\s*[h:.]\s*(\d{1,2})?)?$/); if (!m) return null; const v = Number(m[1]) + Number(m[2] || 0) / 60; return v <= 24 ? v : null; };
+function reglesDefaut(soc) {
+  const chamas = /chamas/i.test(`${soc.enseigne || ""} ${ENSEIGNES[soc.id] || ""} ${soc.nom || ""}`) || ["SNDRR", "PALLAS"].includes(soc.id);
+  const jour = (fin, rushSoir) => chamas ? [
+    { de: 9, a: 10.5, cuisine: 1, caisse: 0 }, { de: 10.5, a: 11.5, cuisine: 1, caisse: 1 }, { de: 11.5, a: 13.5, cuisine: 2, caisse: 1 },
+    { de: 13.5, a: 18, cuisine: 1, caisse: 1 }, { de: 18, a: fin - 1.5, cuisine: rushSoir, caisse: 1 }, { de: fin - 1.5, a: fin, cuisine: 1, caisse: 1 }]
+    : [{ de: 7, a: 8, cuisine: 1, caisse: 0 }, { de: 8, a: 17, cuisine: 1, caisse: 1 }];
+  return { jours: [0, 1, 2, 3, 4, 5, 6].map((i) => ({ ouvert: true, besoins: jour(i === 4 || i === 5 ? 23.5 : 22.5, i === 4 || i === 5 ? 3 : 2) })),
+    postes: {}, repos: {}, maxJour: 10, amplitude: 13, reposMin: 11, coupure: 1.5, shiftMin: 3, maxJours: 6, defaut: true };
+}
+function postesDe(R, e) {
+  if (R.postes && R.postes[e.cle] && R.postes[e.cle].length) return R.postes[e.cle];
+  const em = (e.emploi || "").toLowerCase();
+  if (/cuisin|cuisto|commis|plong|chef|pizzai/.test(em) && !/polyval/.test(em)) return ["cuisine"];
+  if (/caiss|vente|vendeu|serveu|accueil|barista|h[ôo]te/.test(em) && !/polyval/.test(em)) return ["caisse"];
+  return ["cuisine", "caisse"];
+}
+S.pl.regles = null;
+function chargerRegles(soc) {
+  if (S.pl.regles && S.pl.regles.soc === soc.id) return S.pl.regles.charge ? null : S.pl.regles.R;
+  S.pl.regles = { soc: soc.id, charge: true };
+  S.db.doc(`saisies/${soc.id}_regles`).get().then((d) => { const R = d.exists && d.data().regles ? d.data().regles : reglesDefaut(soc); S.pl.regles = { soc: soc.id, R, existe: d.exists }; if (S.tab === "planning") render(); })
+    .catch(() => { S.pl.regles = { soc: soc.id, R: reglesDefaut(soc) }; if (S.tab === "planning") render(); });
+  return null;
+}
+async function sauverRegles(soc, R) {
+  delete R.defaut;
+  await S.db.doc(`saisies/${soc.id}_regles`).set({ societe: soc.id, cloture: false, type: "regles-planning", regles: R, majLe: new Date().toISOString(), par: (S.profil && S.profil.nom) || "" });
+  S.pl.regles = { soc: soc.id, R, existe: true };
+}
+/* Besoin par demi-heure : need[j][s] = {cuisine, caisse}, avec t0 = première heure de la semaine */
+function grilleBesoins(R) {
+  const all = R.jours.flatMap((j) => (j.ouvert ? j.besoins : [])); if (!all.length) return null;
+  const t0 = Math.min(...all.map((b) => b.de)), t1 = Math.max(...all.map((b) => (b.a <= b.de ? b.a + 24 : b.a))), n = Math.round((t1 - t0) * 2);
+  const need = R.jours.map((j) => { const g = Array.from({ length: n }, () => ({ cuisine: 0, caisse: 0 })); if (!j.ouvert) return g;
+    j.besoins.forEach((b) => { const a = b.a <= b.de ? b.a + 24 : b.a; for (let s = Math.round((b.de - t0) * 2); s < Math.round((a - t0) * 2); s++) if (g[s]) { g[s].cuisine = Math.max(g[s].cuisine, num(b.cuisine)); g[s].caisse = Math.max(g[s].caisse, num(b.caisse)); } });
+    return g; });
+  const bornes = R.jours.map((j) => { if (!j.ouvert || !j.besoins.length) return null; const pts = new Set(); j.besoins.forEach((b) => { pts.add(b.de); pts.add(b.a <= b.de ? b.a + 24 : b.a); });
+    const p = [...pts].sort((a, b) => a - b); return { O: p[0], F: p[p.length - 1], pts: p }; });
+  return { t0, n, need, bornes };
+}
+const slotsDe = (G, blocs) => { const out = []; blocs.forEach(([a, b]) => { for (let s = Math.round((a - G.t0) * 2); s < Math.round((b - G.t0) * 2); s++) if (s >= 0 && s < G.n) out.push(s); }); return out; };
+const dureeBlocs = (bl) => bl.reduce((x, [a, b]) => x + b - a, 0);
+/* Couverture : chaque salarié présent compte pour son poste du jour (ou le poste le plus en manque s'il est polyvalent sans poste fixé) */
+function couverture(G, affect) {
+  const cov = G.need.map(() => Array.from({ length: G.n }, () => ({ cuisine: 0, caisse: 0 })));
+  affect.filter((x) => x.poste).forEach((x) => slotsDe(G, x.blocs).forEach((s) => cov[x.j][s][x.poste]++));
+  affect.filter((x) => !x.poste).forEach((x) => slotsDe(G, x.blocs).forEach((s) => { const c = cov[x.j][s], nd = G.need[x.j][s];
+    const p = x.postes.slice().sort((a, b) => (nd[b] - c[b]) - (nd[a] - c[a]))[0] || "cuisine"; c[p]++; }));
+  return cov;
+}
+function manques(G, cov) {
+  const out = []; G.need.forEach((g, j) => ["cuisine", "caisse"].forEach((p) => { let deb = null, n = 0;
+    for (let s = 0; s <= G.n; s++) { const m = s < G.n ? Math.max(0, g[s][p] - cov[j][s][p]) : 0;
+      if (m && deb === null) { deb = s; n = m; } else if (deb !== null && m !== n) { out.push({ j, p, de: G.t0 + deb / 2, a: G.t0 + s / 2, n }); deb = m ? s : null; n = m; } } }));
+  return out;
+}
+function genererPlanning(R, eq, jours, existant) {
+  const G = grilleBesoins(R); if (!G) return { erreur: "Aucun besoin défini : indiquez les créneaux dans les règles." };
+  const P = { maxJour: num(R.maxJour) || 10, amp: num(R.amplitude) || 13, repos: num(R.reposMin) || 11, coup: num(R.coupure) || 1.5, min: num(R.shiftMin) || 3, maxJours: num(R.maxJours) || 6 };
+  const E = eq.map((e) => { const defH = Math.round(e.hebdo / 6 * 4) / 4, st = { e, postes: postesDe(R, e), h: 0, cible: e.hebdo, jours: Array(7).fill(null), indispo: Array(7).fill(false) };
+    jours.forEach((d, j) => { if ((e.entree && d < e.entree) || (e.sortie && d > e.sortie)) { st.indispo[j] = true; st.cible -= defH; }
+      if ((R.repos && R.repos[e.cle] || []).includes(j)) st.indispo[j] = true;
+      const r = lireCase(existant(e.cle, d), defH);
+      if (r.cp || r.mal || r.ne) { st.indispo[j] = true; st.cible -= r.cp ? defH : r.mal + r.ne; if (r.h) st.jours[j] = { blocs: r.plages || [], fixe: true, poste: null }; }
+      else if (r.plages && r.plages.length) st.jours[j] = { blocs: r.plages, fixe: true, poste: existant.poste ? existant.poste(e.cle, d) : null }; });
+    st.h = st.jours.reduce((a, x) => a + (x ? dureeBlocs(x.blocs) : 0), 0); st.cible = Math.max(0, Math.round(st.cible * 2) / 2); return st; });
+  const affect = () => E.flatMap((st) => st.jours.map((x, j) => (x ? { j, blocs: x.blocs, poste: x.poste, postes: st.postes } : null)).filter(Boolean));
+  let cov = couverture(G, affect());
+  const candidats = G.bornes.map((b) => { if (!b) return []; const pts = new Set(b.pts); for (let t = b.O; t <= b.F; t += 0.5) if (Math.abs(t - Math.round(t)) < 0.01) pts.add(t);
+    const p = [...pts].filter((t) => t >= b.O && t <= b.F).sort((x, y) => x - y), out = [];
+    for (let i = 0; i < p.length; i++) for (let k = i + 1; k < p.length; k++) { const L = p[k] - p[i]; if (L >= P.min && L <= P.maxJour) out.push([[p[i], p[k]]]); }
+    const ps = [...new Set(b.pts.flatMap((t) => [t - 1, t, t + 1]))].filter((t) => t >= b.O && t <= b.F).sort((x, y) => x - y);
+    for (let i = 0; i < ps.length; i++) for (let k = i + 1; k < ps.length; k++) for (let m = k + 1; m < ps.length; m++) for (let q = m + 1; q < ps.length; q++) {
+      const a = ps[k] - ps[i], c = ps[q] - ps[m], g = ps[m] - ps[k]; if (a < 2 || c < 2 || g < P.coup || g > 6 || a + c > P.maxJour || ps[q] - ps[i] > P.amp) continue; out.push([[ps[i], ps[k]], [ps[m], ps[q]]]); }
+    return out; });
+  const finJour = (st, j) => { const x = st.jours[j]; return x && x.blocs.length ? Math.max(...x.blocs.map((b) => b[1])) : null; };
+  const debJour = (st, j) => { const x = st.jours[j]; return x && x.blocs.length ? Math.min(...x.blocs.map((b) => b[0])) : null; };
+  const reposOk = (st, j, blocs) => { const deb = Math.min(...blocs.map((b) => b[0])), fin = Math.max(...blocs.map((b) => b[1]));
+    const fp = j > 0 ? finJour(st, j - 1) : null, dn = j < 6 ? debJour(st, j + 1) : null;
+    return (fp === null || deb + 24 - fp >= P.repos) && (dn === null || dn + 24 - fin >= P.repos); };
+  const nbJours = (st) => st.jours.filter(Boolean).length;
+  const evalue = (j, blocs, poste) => { let gain = 0, perte = 0; const nj = G.need[j], cj = cov[j];
+    for (let k = 0; k < blocs.length; k++) { const s1 = Math.max(0, Math.round((blocs[k][0] - G.t0) * 2)), s2 = Math.min(G.n, Math.round((blocs[k][1] - G.t0) * 2));
+      for (let s = s1; s < s2; s++) { if (cj[s][poste] < nj[s][poste]) gain += 0.5; else perte += 0.5; } } return { gain, perte }; };
+  /* Morceaux de besoin qu'un service laisserait orphelins (trop courts pour un autre service) */
+  const orphelins = (j, bl, po) => { let pen = 0; bl.forEach(([a, b]) => { [[Math.round((a - G.t0) * 2) - 1, -1], [Math.round((b - G.t0) * 2), 1]].forEach(([s0, dir]) => { let r = 0;
+      for (let s = s0; s >= 0 && s < G.n; s += dir) { if (bl.some(([x, y]) => s >= Math.round((x - G.t0) * 2) && s < Math.round((y - G.t0) * 2))) break; if (cov[j][s][po] < G.need[j][s][po]) r += 0.5; else break; }
+      if (r > 0 && r < P.min) pen += r; }); }); return pen; };
+  const libre = (st, j) => !st.jours[j] && !st.indispo[j] && nbJours(st) < Math.min(P.maxJours, 6);
+  /* Phase 1 : couvrir les besoins sans dépasser les heures du contrat ; phase 3 : manques restants avec heures en plus (4 h max) */
+  const remplir = (marge, seuil) => { for (let it = 0; it < 400; it++) { let best = null;
+      E.forEach((st) => { const reste = st.cible + marge - st.h; if (reste < P.min) return;
+        for (let j = 0; j < 7; j++) { if (!libre(st, j)) continue;
+          candidats[j].forEach((bl) => { const L = dureeBlocs(bl); if (L > reste + 0.01 || !reposOk(st, j, bl)) return;
+            st.postes.forEach((po) => { const { gain, perte } = evalue(j, bl, po); if (gain < seuil) return; let sc = gain - 1.1 * perte - 0.5 + 0.02 * L; if (best && sc <= best.sc) return; sc -= 1.2 * orphelins(j, bl, po);
+              if (!best || sc > best.sc) best = { sc, st, j, bl, po }; }); }); } });
+      if (!best || best.sc <= 0) break;
+      best.st.jours[best.j] = { blocs: best.bl, poste: best.po }; best.st.h += dureeBlocs(best.bl); cov = couverture(G, affect()); } };
+  /* Rognage : on retire les demi-heures en trop aux extrémités des services (personnel déjà suffisant), pour libérer des heures */
+  const rogner = () => { E.forEach((st) => st.jours.forEach((x, j) => { if (!x || x.fixe) return; const po = x.poste || st.postes[0];
+    x.blocs.forEach((bl) => { let ok = true; while (ok && bl[1] - bl[0] - 0.5 >= 2 && dureeBlocs(x.blocs) - 0.5 >= P.min) { ok = false;
+      for (const bout of [0, 1]) { const s0 = Math.round(((bout ? bl[1] - 0.5 : bl[0]) - G.t0) * 2); const c = cov[j][s0], nd = G.need[j][s0];
+        if (c && c[po] > nd[po]) { if (bout) bl[1] -= 0.5; else bl[0] += 0.5; st.h -= 0.5; c[po]--; ok = true; break; } } } }); })); };
+  /* Allongements utiles (gain > 0) dans la limite des heures permises */
+  const allonger = (marge) => { for (let it = 0; it < 300; it++) { let best = null;
+    E.forEach((st) => { if (st.cible + marge - st.h < 0.5) return; st.jours.forEach((x, j) => { if (!x || x.fixe || !G.bornes[j]) return; const b = G.bornes[j], po = x.poste || st.postes[0];
+      x.blocs.forEach((bl, bi) => [[-0.5, 0], [0, 0.5]].forEach(([da, db]) => { const nb = x.blocs.map((y, k) => (k === bi ? [y[0] + da, y[1] + db] : y)), n2 = nb[bi];
+        if (n2[0] < b.O || n2[1] > b.F || dureeBlocs(nb) > P.maxJour || Math.max(...nb.map((y) => y[1])) - Math.min(...nb.map((y) => y[0])) > P.amp) return;
+        if (nb.length === 2 && nb[1][0] - nb[0][1] < P.coup - 0.01) return; if (!reposOk({ ...st, jours: st.jours.map((y, k) => (k === j ? null : y)) }, j, nb)) return;
+        const { gain } = evalue(j, [da ? [n2[0], n2[0] + 0.5] : [n2[1] - 0.5, n2[1]]], po); if (gain <= 0) return;
+        const sc = gain - (st.h + 0.5 > st.cible ? 0.1 : 0); if (!best || sc > best.sc) best = { st, j, nb, sc }; })); }); });
+    if (!best) break; best.st.jours[best.j] = { ...best.st.jours[best.j], blocs: best.nb }; best.st.h += 0.5; cov = couverture(G, affect()); } };
+  remplir(0, 1); rogner(); cov = couverture(G, affect()); allonger(0); remplir(0, 1); rogner(); cov = couverture(G, affect()); allonger(0);
+  /* Phase 2 : compléter les heures de contrat (allonger un service ou ajouter un jour), là où c'est le plus utile */
+  for (let it = 0; it < 300; it++) { let best = null;
+    E.forEach((st) => { const reste = st.cible - st.h; if (reste < 0.5) return;
+      st.jours.forEach((x, j) => { if (!x || x.fixe || !G.bornes[j]) return; const b = G.bornes[j];
+        x.blocs.forEach((bl, bi) => [[-0.5, 0], [0, 0.5]].forEach(([da, db]) => { const nb = x.blocs.map((y, k) => (k === bi ? [y[0] + da, y[1] + db] : y));
+          const n2 = nb[bi]; if (n2[0] < b.O || n2[1] > b.F || dureeBlocs(nb) > P.maxJour || Math.max(...nb.map((y) => y[1])) - Math.min(...nb.map((y) => y[0])) > P.amp) return;
+          if (nb.length === 2 && nb[1][0] - nb[0][1] < P.coup) return; if (!reposOk({ ...st, jours: st.jours.map((y, k) => (k === j ? null : y)) }, j, nb)) return;
+          const { gain, perte } = evalue(j, [da ? [n2[0], n2[0] + 0.5] : [n2[1] - 0.5, n2[1]]], x.poste || st.postes[0]); const sc = gain - 0.4 * perte - (dureeBlocs(nb) > 8 ? 0.15 : 0);
+          if (!best || sc > best.sc) best = { sc, st, j, nb }; })); });
+      if (reste >= P.min) for (let j = 0; j < 7; j++) { if (!libre(st, j)) continue;
+        candidats[j].forEach((bl) => { const L = dureeBlocs(bl); if (L > reste + 0.01 || !reposOk(st, j, bl)) return;
+          st.postes.forEach((po) => { const { gain, perte } = evalue(j, bl, po); const sc = (gain - 0.4 * perte) / L * 0.5 + 0.01 * L; if (!best || sc > best.sc) best = { sc, st, j, bl, po }; }); }); } });
+    if (!best) break;
+    if (best.nb) { best.st.h += dureeBlocs(best.nb) - dureeBlocs(best.st.jours[best.j].blocs); best.st.jours[best.j] = { ...best.st.jours[best.j], blocs: best.nb }; }
+    else { best.st.jours[best.j] = { blocs: best.bl, poste: best.po }; best.st.h += dureeBlocs(best.bl); }
+    cov = couverture(G, affect()); }
+  allonger(4); remplir(4, 1);
+  E.forEach((st) => { if (st.h <= st.cible) return; const cible = st.cible; st.jours.forEach((x, j) => { if (!x || x.fixe) return; const po = x.poste || st.postes[0];
+    x.blocs.forEach((bl) => { let ok = true; while (ok && st.h - 0.5 >= cible && bl[1] - bl[0] - 0.5 >= 2 && dureeBlocs(x.blocs) - 0.5 >= P.min) { ok = false;
+      for (const bout of [0, 1]) { const s0 = Math.round(((bout ? bl[1] - 0.5 : bl[0]) - G.t0) * 2), c = cov[j][s0], nd = G.need[j][s0];
+        if (c && c[po] > nd[po]) { if (bout) bl[1] -= 0.5; else bl[0] += 0.5; st.h -= 0.5; c[po]--; ok = true; break; } } } }); }); });
+  /* Fusion des blocs contigus après allongement */
+  E.forEach((st) => st.jours.forEach((x) => { if (!x || x.blocs.length < 2) return; const b = x.blocs.slice().sort((a, c) => a[0] - c[0]); const out = [b[0].slice()];
+    for (let i = 1; i < b.length; i++) { const l = out[out.length - 1]; if (b[i][0] <= l[1] + 0.01) l[1] = Math.max(l[1], b[i][1]); else out.push(b[i].slice()); } x.blocs = out; }));
+  cov = couverture(G, affect());
+  return { G, E, cov, manques: manques(G, cov) };
+}
+function lignesManques(G, L, liste) {
+  return liste.map((m) => `${JOURS_PL[m.j]} ${fH(m.de)}–${fH(m.a)} : il manque ${m.n} en ${POSTES_PL[m.p].toLowerCase()}`);
+}
+async function lancerGeneration(soc, L, jours, eq) {
+  const R = chargerRegles(soc); if (!R) { toast("Règles du planning en cours de chargement, réessayez."); return; }
+  const deja = eq.some((e) => jours.some((d) => { const t = plCase(e.cle, d); return t && !/^(CP|MAL|ABS)/.test(t); }));
+  let garder = true;
+  if (deja) { const rep = prompt("Des horaires sont déjà saisis cette semaine.\n1 = les garder et compléter autour\n2 = tout régénérer (les congés, maladies et absences sont toujours conservés)", "1"); if (rep === null) return; garder = rep.trim() !== "2"; }
+  const existant = (k, d) => { const t = plCase(k, d); return garder || /^(CP|MAL|ABS)/.test(t) ? t : ""; };
+  existant.poste = (k, d) => ((S.saisie && S.saisie.postes && S.saisie.postes[k]) || {})[d] || null;
+  const res = genererPlanning(R, eq, jours, existant); if (res.erreur) { toast(res.erreur); return; }
+  if (!S.saisie) S.saisie = { societe: S.soc, mois: S.mois, cloture: false, nouveau: true };
+  const postes = S.saisie.postes = S.saisie.postes || {};
+  res.E.forEach((st) => jours.forEach((d, j) => { const x = st.jours[j], t = plCase(st.e.cle, d);
+    if (/^(CP|MAL|ABS)/.test(t)) return; if ((st.e.entree && d < st.e.entree) || (st.e.sortie && d > st.e.sortie)) return;
+    majCase(st.e.cle, d, x ? x.blocs.map(([a, b]) => `${fH(a)}-${fH(b)}`).join(" ") : "", true);
+    (postes[st.e.cle] = postes[st.e.cle] || {})[d] = x ? x.poste || null : null; }));
+  S.saisie.planningAuto = { semaine: L, le: new Date().toISOString(), par: (S.profil && S.profil.nom) || "" };
+  planifierSauvegarde(); S.pl.dernier = { L, manques: lignesManques(res.G, L, res.manques), ecarts: res.E.filter((st) => Math.abs(st.cible - st.h) >= 0.5).map((st) => `${st.e.prenom} : ${hTxt(st.h) || "0h"} planifiées pour ${hTxt(st.cible)} au contrat`) };
+  render(); toast(res.manques.length ? `Planning généré : ${res.manques.length} créneau(x) restent à couvrir (voir sous le tableau).` : "Planning généré : tous les besoins sont couverts.");
+}
+function couvertureSemaine(R, eq, jours) {
+  const G = grilleBesoins(R); if (!G) return null;
+  const aff = []; eq.forEach((e) => { const pts = postesDe(R, e); jours.forEach((d, j) => { const r = lireCase(plCase(e.cle, d), 7); if (r.plages && r.plages.length) aff.push({ j, blocs: r.plages, poste: ((S.saisie && S.saisie.postes && S.saisie.postes[e.cle]) || {})[d] || null, postes: pts }); }); });
+  return { G, manques: manques(G, couverture(G, aff)) };
+}
+function ouvrirRegles(soc, eq) {
+  const R0 = chargerRegles(soc); if (!R0) { toast("Chargement…"); return; }
+  const R = JSON.parse(JSON.stringify(R0));
+  const dlg = document.createElement("div"); dlg.className = "modal-fond";
+  const dessiner = () => {
+    dlg.innerHTML = `<div class="panel modal" role="dialog" aria-label="Règles du planning" style="max-width:min(1050px,96vw);width:96vw;max-height:92vh;overflow:auto"><h2>Règles du planning · ${esc(soc.enseigne || ENSEIGNES[soc.id] || soc.nom)}</h2>
+      ${R.defaut ? `<p class="small" style="margin:0;color:var(--warn)">Règles proposées par défaut, à vérifier et ajuster : horaires d'ouverture et nombre de personnes par créneau.</p>` : ""}
+      <p class="small muted" style="margin:0">Pour chaque jour, indiquez les créneaux et le nombre de personnes nécessaires en cuisine et en caisse. Exemple Chamas : 1 en cuisine et 1 en caisse, 2 en cuisine aux rushs, 3 en cuisine le vendredi et le samedi soir.</p>
+      <div class="pl-regles">${R.jours.map((jr, j) => `<div class="pl-rj"><div class="row" style="align-items:center;gap:8px"><b style="min-width:5em">${["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"][j]}</b>
+          <label class="check small"><input type="checkbox" data-rgo="${j}" ${jr.ouvert ? "checked" : ""}> ouvert</label><span class="grow"></span>
+          <button class="link small" data-rgcp="${j}">Copier ce jour sur…</button></div>
+        ${jr.ouvert ? `<table class="pl-rt"><thead><tr><th>De</th><th>À</th><th>Cuisine</th><th>Caisse</th><th></th></tr></thead><tbody>
+          ${jr.besoins.map((b, k) => `<tr><td><input data-rg="${j}|${k}|de" value="${fH(b.de)}" size="5"></td><td><input data-rg="${j}|${k}|a" value="${fH(b.a)}" size="5"></td>
+            <td><input type="number" min="0" max="9" data-rg="${j}|${k}|cuisine" value="${num(b.cuisine)}" style="width:3.5em"></td><td><input type="number" min="0" max="9" data-rg="${j}|${k}|caisse" value="${num(b.caisse)}" style="width:3.5em"></td>
+            <td><button class="link" data-rgx="${j}|${k}" title="Supprimer ce créneau">✕</button></td></tr>`).join("")}
+          </tbody></table><button class="link small" data-rgadd="${j}">+ créneau</button>` : '<p class="small muted" style="margin:4px 0">Fermé</p>'}</div>`).join("")}</div>
+      <h3>Postes et repos des salariés</h3>
+      <div class="tbl-wrap"><table><thead><tr><th>Salarié</th><th>Contrat</th><th>Cuisine</th><th>Caisse</th><th>Jours de repos imposés</th></tr></thead><tbody>
+      ${eq.map((e) => { const po = postesDe(R, e), rp = (R.repos && R.repos[e.cle]) || [];
+        return `<tr><td><b>${esc(e.prenom)}</b> <span class="small muted">${esc(e.emploi || "")}</span></td><td>${hTxt(e.hebdo)}</td>
+          <td><input type="checkbox" data-rgp="${esc(e.cle)}|cuisine" ${po.includes("cuisine") ? "checked" : ""} aria-label="Cuisine"></td><td><input type="checkbox" data-rgp="${esc(e.cle)}|caisse" ${po.includes("caisse") ? "checked" : ""} aria-label="Caisse"></td>
+          <td class="row" style="gap:4px;flex-wrap:wrap">${JOURS_PL.map((jl, j) => `<label class="check small"><input type="checkbox" data-rgr="${esc(e.cle)}|${j}" ${rp.includes(j) ? "checked" : ""}>${jl}</label>`).join("")}</td></tr>`; }).join("")}
+      </tbody></table></div>
+      <h3>Limites</h3>
+      <div class="form"><label>Heures max par jour<input type="number" step="0.5" data-rgl="maxJour" value="${num(R.maxJour) || 10}"></label>
+        <label>Amplitude max (début → fin)<input type="number" step="0.5" data-rgl="amplitude" value="${num(R.amplitude) || 13}"></label>
+        <label>Repos entre deux journées (h)<input type="number" step="0.5" data-rgl="reposMin" value="${num(R.reposMin) || 11}"></label>
+        <label>Coupure minimum (h)<input type="number" step="0.5" data-rgl="coupure" value="${num(R.coupure) || 1.5}"></label>
+        <label>Service minimum (h)<input type="number" step="0.5" data-rgl="shiftMin" value="${num(R.shiftMin) || 3}"></label>
+        <label>Jours travaillés max / semaine<input type="number" min="1" max="6" data-rgl="maxJours" value="${num(R.maxJours) || 6}"></label></div>
+      <div class="row"><button class="primary" id="rg_ok">Enregistrer les règles</button><button id="rg_ko">Fermer</button><span class="grow"></span><button class="link small" id="rg_def">Revenir aux règles par défaut</button></div></div>`;
+    const q = (s) => dlg.querySelectorAll(s);
+    q("[data-rg]").forEach((i) => (i.onchange = () => { const [j, k, f] = i.dataset.rg.split("|"); const b = R.jours[j].besoins[k];
+      if (f === "de" || f === "a") { const v = lireH(i.value); if (v === null) { toast("Heure invalide (ex. 11h30)."); i.value = fH(b[f]); return; } b[f] = v === 0 && f === "a" ? 24 : v; } else b[f] = Math.max(0, Math.round(num(i.value))); }));
+    q("[data-rgo]").forEach((i) => (i.onchange = () => { const jr = R.jours[i.dataset.rgo]; jr.ouvert = i.checked; if (jr.ouvert && !jr.besoins.length) jr.besoins = [{ de: 11, a: 14, cuisine: 1, caisse: 1 }]; dessiner(); }));
+    q("[data-rgadd]").forEach((b) => (b.onclick = () => { const L = R.jours[b.dataset.rgadd].besoins, der = L[L.length - 1]; L.push({ de: der ? der.a : 11, a: der ? Math.min(der.a + 2, 24) : 14, cuisine: 1, caisse: 1 }); dessiner(); }));
+    q("[data-rgx]").forEach((b) => (b.onclick = () => { const [j, k] = b.dataset.rgx.split("|"); R.jours[j].besoins.splice(k, 1); dessiner(); }));
+    q("[data-rgcp]").forEach((b) => (b.onclick = () => { const j = Number(b.dataset.rgcp); const rep = prompt("Copier sur quels jours ? (ex. « 1-4 » pour lundi à jeudi, « 5 6 », « tous »)", "tous"); if (!rep) return;
+      let cibles = []; if (/tous/i.test(rep)) cibles = [0, 1, 2, 3, 4, 5, 6]; else rep.replace(/(\d)\s*-\s*(\d)/g, (m, a, c) => { for (let x = +a; x <= +c; x++) cibles.push(x - 1); return " "; }).split(/[\s,;]+/).forEach((x) => { if (/^[1-7]$/.test(x)) cibles.push(+x - 1); });
+      cibles.filter((c) => c !== j && c >= 0 && c < 7).forEach((c) => (R.jours[c] = JSON.parse(JSON.stringify(R.jours[j])))); dessiner(); }));
+    q("[data-rgp]").forEach((i) => (i.onchange = () => { const [k, p] = i.dataset.rgp.split("|"); const e = eq.find((x) => x.cle === k); R.postes = R.postes || {};
+      const cur = new Set(postesDe(R, e)); if (i.checked) cur.add(p); else cur.delete(p); if (!cur.size) { toast("Il faut au moins un poste."); i.checked = true; return; } R.postes[k] = [...cur]; }));
+    q("[data-rgr]").forEach((i) => (i.onchange = () => { const [k, j] = i.dataset.rgr.split("|"); R.repos = R.repos || {}; const cur = new Set(R.repos[k] || []); if (i.checked) cur.add(+j); else cur.delete(+j); R.repos[k] = [...cur].sort(); }));
+    q("[data-rgl]").forEach((i) => (i.onchange = () => (R[i.dataset.rgl] = num(i.value))));
+    dlg.querySelector("#rg_ko").onclick = () => dlg.remove();
+    dlg.querySelector("#rg_def").onclick = () => { if (!confirm("Remplacer les créneaux par les règles par défaut ? (postes et repos des salariés conservés)")) return; const d = reglesDefaut(soc); R.jours = d.jours; dessiner(); };
+    dlg.querySelector("#rg_ok").onclick = async () => {
+      for (const jr of R.jours) for (const b of jr.besoins) if (!(b.a > b.de)) { toast("Un créneau a une heure de fin avant son début."); return; }
+      R.jours.forEach((jr) => jr.besoins.sort((a, b) => a.de - b.de));
+      try { await sauverRegles(soc, R); dlg.remove(); toast("Règles du planning enregistrées."); render(); } catch (e) { toast("Enregistrement impossible : " + (e.message || e)); } };
+  };
+  document.body.appendChild(dlg); dessiner();
 }
 
 /* ---------- Dettes fournisseurs : factures à payer, échéances, paiements ---------- */

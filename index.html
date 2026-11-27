@@ -154,6 +154,12 @@ input.auto,select.auto{background:var(--accent-soft)}
 
 table.pl td{padding:3px 4px;vertical-align:top;min-width:92px} table.pl td:first-child{min-width:110px;white-space:nowrap}
 .pl-in{width:100%;min-width:84px;font-size:12.5px;padding:4px 5px;border:1px solid var(--line);border-radius:4px;background:var(--surface);color:var(--ink)}
+.pl-ban{background:var(--accent-soft);border:1px solid var(--accent);border-radius:8px;padding:8px 12px;margin:6px 0}
+.pl-couv{border-radius:8px;padding:8px 12px;margin:8px 0} .pl-couv.ok{background:var(--ok-soft)} .pl-couv.warn{background:var(--warn-soft)} .pl-couv ul{margin:4px 0 0;padding-left:18px;columns:2;font-size:13px}
+.pl-po{font-size:11px;padding:0 4px;border-radius:4px;text-decoration:none} .pl-po-cuisine{background:#fde2c8;color:#8a4b12} .pl-po-caisse{background:#d6ecff;color:#1d4f7a}
+.pl-regles{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin:8px 0} .pl-rj{border:1px solid var(--line);border-radius:8px;padding:8px}
+.pl-rt{width:100%} .pl-rt th,.pl-rt td{padding:2px 3px;font-size:12.5px} .pl-rt input{padding:3px 4px}
+@media (max-width:700px){.pl-couv ul{columns:1}}
 .pl-on .pl-in{border-color:var(--accent,#2a6f97)} .pl-cp{background:#ffe7c2} .pl-mal{background:#ffd6f5} .pl-ne{background:#ffd3d0} .pl-err .pl-in{border-color:var(--bad);color:var(--bad)}
 .pl-hors{background:var(--soft)} th.pl-fer{color:var(--bad)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .pl-cp{background:#4a3410}:root:not([data-theme="light"]) .pl-mal{background:#4a1d43}:root:not([data-theme="light"]) .pl-ne{background:#4d1f1c}}
@@ -196,13 +202,13 @@ details.menu{position:relative}details.menu>summary{list-style:none;cursor:point
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="supabase-config.js?v=20261126a"></script>
-<script src="supa-db.js?v=20261126a"></script>
-<script src="core.js?v=20261126a"></script>
-<script src="contrats.js?v=20261126a"></script>
-<script src="docx.js?v=20261126a"></script>
-<script src="cafat.js?v=20261126a"></script>
-<script src="app.js?v=20261126a"></script>
+<script src="supabase-config.js?v=20261128a"></script>
+<script src="supa-db.js?v=20261128a"></script>
+<script src="core.js?v=20261128a"></script>
+<script src="contrats.js?v=20261128a"></script>
+<script src="docx.js?v=20261128a"></script>
+<script src="cafat.js?v=20261128a"></script>
+<script src="app.js?v=20261128a"></script>
 <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});</script>
 </body>
 </html>
